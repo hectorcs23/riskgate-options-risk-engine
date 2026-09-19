@@ -1,0 +1,374 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Position {
+  id           String   @id @default(cuid())
+  portfolioId  String
+  symbol       String
+  assetType    String
+  market       String
+  quantity     Float
+  averageCost  Float
+  currentPrice Float
+  currency     String
+  account      String
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+}
+
+model TradeIdea {
+  id                          String   @id @default(cuid())
+  portfolioId                 String
+  symbol                      String
+  direction                   String
+  strategy                    String
+  thesis                      String
+  catalyst                    String?
+  invalidationLevel           Float?
+  targetPrice                 Float?
+  expirationDate              DateTime?
+  optionContractSymbol        String?
+  optionType                  String?
+  strikePrice                 Float?
+  shortStrikePrice            Float?
+  contractBid                 Float?
+  contractAsk                 Float?
+  contractMid                 Float?
+  contractDelta               Float?
+  contractGamma               Float?
+  contractTheta               Float?
+  contractVega                Float?
+  contractRho                 Float?
+  contractImpliedVolatility   Float?
+  contractUnderlyingPrice     Float?
+  contractBreakEvenPrice      Float?
+  contractSnapshotAt          DateTime?
+  premiumCost                 Float?
+  maxLoss                     Float
+  expectedReward              Float?
+  exitPlan                    String?
+  status                      String   @default("draft")
+  marketRegimeScore           Float?
+  technicalScore              Float?
+  optionsQualityScore         Float?
+  tradeQualityScore           Float?
+  totalScore                  Float?
+  decision                    String?
+  suggestedRiskMXN            Float?
+  reasons                     String?
+  warnings                    String?
+  spyTrend                    String   @default("neutral")
+  qqqTrend                    String   @default("neutral")
+  vixCondition                String   @default("normal")
+  marketBreadth               String   @default("neutral")
+  macroRisk                   String   @default("medium")
+  trend                       String   @default("sideways")
+  priceVs20MA                 String   @default("above")
+  priceVs50MA                 String   @default("above")
+  rsiCondition                String   @default("neutral")
+  volumeCondition             String   @default("normal")
+  supportResistanceQuality    String   @default("average")
+  bidAskSpreadPercent         Float    @default(8)
+  optionVolume                Float    @default(100)
+  openInterest                Float    @default(500)
+  daysToExpiration            Float    @default(30)
+  impliedVolatilityRank       Float?
+  premiumAsPercentOfPortfolio Float    @default(0.5)
+  isChasing                   Boolean  @default(false)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+  lastEvaluatedAt             DateTime?
+
+  portfolio     Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  optionLegs    OptionLeg[]
+  scores         ModelScore?
+  scoreSnapshots TradeScoreSnapshot[]
+  journalEntries TradeJournal[]
+}
+
+model OptionLeg {
+  id             String   @id @default(cuid())
+  tradeIdeaId    String
+  symbol         String?
+  underlying     String
+  optionType     String
+  side           String
+  quantity       Int      @default(1)
+  expirationDate DateTime
+  strike         Float
+  bid            Float?
+  ask            Float?
+  mid            Float?
+  spreadPercent  Float?
+  impliedVol     Float?
+  ivRank         Float?
+  delta          Float?
+  gamma          Float?
+  theta          Float?
+  vega           Float?
+  rho            Float?
+  openInterest   Int?
+  volume         Int?
+  dte            Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tradeIdea TradeIdea @relation(fields: [tradeIdeaId], references: [id], onDelete: Cascade)
+
+  @@index([tradeIdeaId])
+  @@index([underlying, expirationDate])
+}
+
+model ModelScore {
+  id                   String   @id @default(cuid())
+  tradeIdeaId           String   @unique
+  marketRegimeScore     Float
+  technicalScore        Float
+  optionsQualityScore   Float
+  tradeQualityScore     Float
+  totalScore            Float
+  decision              String
+  suggestedRiskMXN      Float
+  reasons               String
+  warnings              String
+  createdAt             DateTime @default(now())
+
+  tradeIdea TradeIdea @relation(fields: [tradeIdeaId], references: [id], onDelete: Cascade)
+}
+
+model TradeScoreSnapshot {
+  id                   String   @id @default(cuid())
+  tradeIdeaId           String
+  snapshotDate          DateTime
+  marketRegimeScore     Float
+  technicalScore        Float
+  optionsQualityScore   Float
+  tradeQualityScore     Float
+  totalScore            Float
+  decision              String
+  suggestedRiskMXN      Float
+  reasons               String
+  warnings              String
+  createdAt             DateTime @default(now())
+
+  tradeIdea TradeIdea @relation(fields: [tradeIdeaId], references: [id], onDelete: Cascade)
+
+  @@unique([tradeIdeaId, snapshotDate])
+}
+
+model RiskSettings {
+  id                          String   @id @default(cuid())
+  portfolioId                 String   @unique
+  totalPortfolioValue          Float    @default(100000)
+  optionsSleevePercent         Float    @default(3)
+  maxOptionsSleeveMXN          Float    @default(3000)
+  baseRiskPerTradePercent      Float    @default(0.5)
+  baseRiskPerTradeMXN          Float    @default(500)
+  maxMonthlyOptionsLossPercent Float    @default(1)
+  maxMonthlyOptionsLossMXN     Float    @default(1000)
+  maxOpenOptionsRiskPercent    Float    @default(2)
+  maxOpenOptionsRiskMXN        Float    @default(2000)
+  redditSentimentEnabled       Boolean  @default(false)
+  redditUseInFinalScore        Boolean  @default(false)
+  redditSubreddits             String   @default("stocks,investing,options,wallstreetbets,ValueInvesting,SecurityAnalysis,StockMarket")
+  redditMaxPostsPerSubreddit   Int      @default(10)
+  redditMaxCommentsPerPost     Int      @default(0)
+  redditRefreshIntervalHours   Int      @default(12)
+  enableYahooFinanceSentiment  Boolean  @default(true)
+  sentimentLookbackDays        Int      @default(14)
+  sentimentMaxDocuments        Int      @default(10)
+  eventRiskEnabled             Boolean  @default(true)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+}
+
+model TradeJournal {
+  id          String   @id @default(cuid())
+  tradeIdeaId String
+  entryDate   DateTime
+  exitDate    DateTime?
+  entryPrice  Float
+  exitPrice   Float?
+  realizedPnL Float?
+  result      String?
+  mistakeTags String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tradeIdea TradeIdea @relation(fields: [tradeIdeaId], references: [id], onDelete: Cascade)
+}
+
+model Portfolio {
+  id           String   @id @default(cuid())
+  name         String
+  institution  String?
+  baseCurrency String   @default("MXN")
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  positions    Position[]
+  tradeIdeas   TradeIdea[]
+  watchlist     WatchlistItem[]
+  snapshots     PortfolioSnapshot[]
+  priceBars     PriceBar[]
+  strategyScanRuns StrategyScanRun[]
+  discoveryHistory DiscoverySymbolHistory[]
+  riskSettings RiskSettings?
+}
+
+model StrategyScanRun {
+  id              String    @id @default(cuid())
+  portfolioId     String?
+  universe        String
+  mode            String    @default("research")
+  symbolsScanned  Int       @default(0)
+  candidatesFound Int       @default(0)
+  ideasInserted   Int       @default(0)
+  ideasUpdated    Int       @default(0)
+  source          String    @default("riskgate-daily")
+  status          String    @default("running")
+  notes           String?
+  error           String?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  portfolio Portfolio? @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([portfolioId, createdAt])
+}
+
+model DiscoverySymbolHistory {
+  id                 String   @id @default(cuid())
+  portfolioId        String
+  symbol             String
+  firstQualifiedAt   DateTime @default(now())
+  lastQualifiedAt    DateTime @default(now())
+  lastSavedAt        DateTime?
+  timesSurfaced      Int      @default(1)
+  lastDiscoveryScore Float?
+  lastOutcome        String?
+  lastReason         String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([portfolioId, symbol])
+  @@index([portfolioId, lastQualifiedAt])
+  @@index([portfolioId, lastSavedAt])
+}
+
+model PriceBar {
+  id          String   @id @default(cuid())
+  portfolioId String
+  symbol      String
+  timeframe   String
+  timestamp   DateTime
+  open        Float
+  high        Float
+  low         Float
+  close       Float
+  volume      Float
+  createdAt   DateTime @default(now())
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([portfolioId, symbol, timeframe, timestamp])
+  @@index([portfolioId, symbol, timeframe, timestamp])
+}
+
+model PortfolioSnapshot {
+  id          String   @id @default(cuid())
+  portfolioId String
+  totalValue  Float
+  cashValue   Float
+  stockValue  Float
+  optionValue Float
+  source      String   @default("manual")
+  createdAt   DateTime @default(now())
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@index([portfolioId, createdAt])
+}
+
+model WatchlistItem {
+  id               String    @id @default(cuid())
+  portfolioId      String
+  symbol           String
+  name             String?
+  market           String    @default("US")
+  currency         String    @default("USD")
+  dataSource       String    @default("yahoo")
+  currentPrice     Float?
+  previousClose    Float?
+  dayChange        Float?
+  dayChangePercent Float?
+  lastUpdated      DateTime?
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([portfolioId, symbol])
+}
+
+model RedditDocument {
+  id             String    @id @default(cuid())
+  symbol         String
+  subreddit      String
+  postId         String?
+  commentId      String?
+  url            String?
+  title          String?
+  body           String
+  score          Int?
+  numComments    Int?
+  createdUtc     DateTime?
+  cleanedText    String
+  sentiment      String?
+  sentimentScore Float?
+  embeddingId    String?
+  fetchedAt      DateTime  @default(now())
+
+  @@unique([symbol, subreddit, postId, commentId])
+  @@index([symbol, subreddit, fetchedAt])
+}
+
+model YahooFinanceDocument {
+  id             String   @id @default(cuid())
+  portfolioId    String?
+  ticker         String
+  title          String
+  publisher      String?
+  summary        String?
+  url            String?
+  publishedAt    DateTime?
+  collectedAt    DateTime @default(now())
+  sentimentLabel String?
+  sentimentScore Float?
+  relevanceScore Float?
+  hypeScore      Float?
+  fearScore      Float?
+  catalysts      String?
+  concerns       String?
+
+  @@index([ticker])
+  @@index([publishedAt])
+  @@index([collectedAt])
+}

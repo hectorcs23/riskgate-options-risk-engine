@@ -1,0 +1,274 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage[spanish]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\geometry{margin=1in}
+\setlist[itemize]{leftmargin=1.2em}
+
+\title{RiskGate: Nueva Versión del Modelo de Opciones}
+\author{RiskGate}
+\date{Mayo 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Resumen}
+
+Esta versión mantiene la filosofía original de RiskGate: operación local, datos de mercado de solo lectura, sin scraping de broker, sin colocación de órdenes y sin trading automático. El objetivo sigue siendo apoyar la disciplina antes de entrar a una operación, no predecir precios ni dar asesoría financiera.
+
+La actualización hace que el modelo sea más correcto para opciones. Ahora puede evaluar estructuras multi-leg, calcular indicadores técnicos desde barras OHLCV, medir la calidad de contratos con funciones continuas, simular escenarios de payoff con Monte Carlo y resumir narrativa pública de Reddit como una señal cualitativa opcional.
+
+\section{Estructura Multi-Leg}
+
+Antes, una idea de trade se aproximaba con un solo contrato principal. Eso funcionaba para una call o put simple, pero era insuficiente para spreads, coberturas, collars o estrategias con piernas largas y cortas.
+
+La nueva tabla \texttt{OptionLeg} guarda cada pierna con:
+
+\begin{itemize}
+  \item tipo de opción: call o put;
+  \item lado: long o short;
+  \item cantidad, vencimiento y strike;
+  \item bid, ask, mid y spread;
+  \item IV, IV rank, Greeks, volumen, open interest y DTE.
+\end{itemize}
+
+RiskGate conserva los campos antiguos para compatibilidad. Si una idea vieja no tiene piernas explícitas, el sistema genera una pierna virtual a partir del contrato legacy.
+
+\section{Métricas de Estrategia}
+
+El nuevo motor de payoff calcula la utilidad o pérdida al vencimiento por pierna:
+
+\[
+\text{callPayoff} = \max(S_T - K, 0)
+\]
+
+\[
+\text{putPayoff} = \max(K - S_T, 0)
+\]
+
+Para una pierna long:
+
+\[
+\text{PnL} = q \times 100 \times (\text{payoff} - \text{prima pagada})
+\]
+
+Para una pierna short:
+
+\[
+\text{PnL} = q \times 100 \times (\text{prima recibida} - \text{payoff})
+\]
+
+La suma de las piernas produce métricas de estrategia:
+
+\begin{itemize}
+  \item débito neto y crédito neto;
+  \item pérdida máxima;
+  \item ganancia máxima;
+  \item puntos de break-even;
+  \item Delta, Gamma, Theta y Vega totales;
+  \item curva determinística de payoff.
+\end{itemize}
+
+El modelo bloquea por defecto piernas short desnudas cuando no existe una cobertura definida por otra pierna long compatible.
+
+\section{Indicadores Técnicos Automáticos}
+
+La nueva tabla \texttt{PriceBar} almacena barras históricas por portafolio, símbolo, temporalidad y timestamp. Con esas barras se calculan:
+
+\begin{itemize}
+  \item SMA20, SMA50 y SMA200;
+  \item RSI14;
+  \item ATR14;
+  \item volumen relativo;
+  \item BWAP;
+  \item distancia del precio al BWAP.
+\end{itemize}
+
+BWAP se implementa como un promedio ponderado por volumen estilo VWAP:
+
+\[
+\text{BWAP} =
+\frac{\sum \text{precio típico} \times \text{volumen}}
+{\sum \text{volumen}}
+\]
+
+donde:
+
+\[
+\text{precio típico} = \frac{high + low + close}{3}
+\]
+
+Si no existen high y low, el cálculo usa close por volumen.
+
+\section{Score Técnico Continuo}
+
+El score técnico ya no depende solo de etiquetas manuales como ``arriba de la media de 20 días''. Ahora combina calidades continuas:
+
+\[
+\text{technicalScore} = 100 \times (
+0.25Q_{trend} +
+0.20Q_{MA} +
+0.15Q_{RSI} +
+0.15Q_{volume} +
+0.10Q_{BWAP} +
+0.10Q_{SR} +
+0.05Q_{ATR})
+\]
+
+Para trades bullish, favorece precio sobre SMA20/SMA50, SMA20 sobre SMA50, cierre sobre BWAP, RSI saludable y volumen relativo fuerte. Para trades bearish, invierte la lógica de medias y BWAP. Para trades neutrales, favorece precio cerca de BWAP y menor expansión de ATR.
+
+El usuario puede mantener inputs manuales, pero RiskGate muestra advertencias cuando esos inputs contradicen los indicadores calculados.
+
+\section{Calidad Continua de Opciones}
+
+La calidad de opciones usa una función continua con desglose por componente:
+
+\[
+\text{optionsQuality} = 100 \times (
+0.30Q_{spread} +
+0.20Q_{DTE} +
+0.15Q_{volume} +
+0.15Q_{OI} +
+0.08Q_{IVRank} +
+0.07Q_{premium} +
+0.05Q_{theta})
+\]
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+Componente & Lógica \\
+\midrule
+Spread & Crédito completo hasta 2\%; decae suavemente después. \\
+DTE & Cero bajo 5 días; máximo entre 21 y 60 días. \\
+Volumen & Escala con raíz cuadrada hacia 500 contratos. \\
+Open interest & Escala con raíz cuadrada hacia 1000 contratos. \\
+IV rank & Penalización cuadrática para IV rank alto. \\
+Prima & Máxima calidad bajo 0.25\% del portafolio. \\
+Theta & Penaliza theta alto frente al mid del contrato. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los hard stops existentes se mantienen: spread mayor a 15\%, DTE menor a 7, prima mayor a 1\% del portafolio y liquidez muy baja.
+
+\section{Monte Carlo}
+
+El motor Monte Carlo simula precios terminales con movimiento browniano geométrico:
+
+\[
+S_T = S_0 \exp((\mu - q - 0.5\sigma^2)\tau + \sigma\sqrt{\tau}Z)
+\]
+
+Por defecto:
+
+\begin{itemize}
+  \item drift esperado \(\mu = 0\);
+  \item tasa libre de riesgo \(r = 0.04\);
+  \item dividend yield \(q = 0\);
+  \item 10,000 simulaciones en el módulo base.
+\end{itemize}
+
+Cada simulación calcula el payoff de toda la estructura multi-leg. El resultado muestra probabilidad de utilidad, valor esperado, mediana, P5, P95, CVaR95, pérdida máxima simulada, ganancia máxima simulada e histograma.
+
+Monte Carlo no reemplaza los hard stops. Solo agrega un overlay pequeño:
+
+\begin{itemize}
+  \item +5 si EV es positivo y la probabilidad de utilidad supera 55\%;
+  \item -5 si EV es negativo;
+  \item -10 si CVaR95 está cerca de la pérdida máxima.
+\end{itemize}
+
+\section{Reddit RAG y Sentimiento}
+
+El módulo de Reddit está apagado por defecto. Cuando se configuran credenciales, RiskGate usa datos públicos de Reddit, limpia el texto y guarda solo campos necesarios para auditoría local.
+
+El análisis clasifica la narrativa como:
+
+\begin{itemize}
+  \item strong bullish;
+  \item bullish;
+  \item mixed;
+  \item bearish;
+  \item strong bearish;
+  \item hype;
+  \item fear;
+  \item low signal.
+\end{itemize}
+
+La señal de Reddit no aprueba trades. Puede sumar poco si coincide con la dirección y tiene confianza alta, pero penaliza hype, miedo extremo o preocupaciones recurrentes como fraude, dilución, lawsuit, riesgo de earnings, colapso de demanda o valuación extrema.
+
+\section{Arquitectura del Score}
+
+El score base conserva los pesos adaptativos:
+
+\[
+\text{baseScore} =
+M w_M + T w_T + O w_O + Q w_Q
+\]
+
+Después se agregan overlays:
+
+\[
+\text{finalScore} =
+\text{clamp}(\text{baseScore} + \text{MonteCarloOverlay} + \text{SentimentOverlay}, 0, 100)
+\]
+
+Los hard stops siguen anulando todo:
+
+\[
+\text{si existe hard stop} \Rightarrow \text{decisión} = reject
+\]
+
+\section{Sizing de Riesgo}
+
+La aprobación no implica tamaño completo. La nueva fórmula de sizing es:
+
+\[
+\text{risk} =
+\text{baseRisk}
+\times C
+\times L
+\times R
+\times V
+\times K
+\times MC
+\times S
+\]
+
+donde:
+
+\begin{itemize}
+  \item \(C\): multiplicador de confianza;
+  \item \(L\): multiplicador de liquidez;
+  \item \(R\): multiplicador de régimen de mercado;
+  \item \(V\): multiplicador de volatilidad;
+  \item \(K\): multiplicador de concentración;
+  \item \(MC\): multiplicador de Monte Carlo;
+  \item \(S\): multiplicador de sentimiento.
+\end{itemize}
+
+Luego se aplican los límites finales del portafolio:
+
+\[
+\text{risk final} = \min(
+\text{risk},
+\text{sleeve restante},
+\text{límite mensual restante},
+\text{riesgo abierto restante})
+\]
+
+\section{Conclusión}
+
+La nueva versión convierte a RiskGate en un sistema más robusto para decidir y dimensionar trades de opciones. La mejora principal no es ``predecir mejor'', sino evitar errores estructurales: spreads mal medidos, contratos ilíquidos, riesgo short indefinido, señales técnicas subjetivas y tamaños de posición demasiado agresivos.
+
+RiskGate sigue siendo una herramienta de apoyo a decisiones. La ejecución queda fuera del sistema y requiere juicio humano.
+
+\end{document}

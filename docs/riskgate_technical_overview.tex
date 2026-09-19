@@ -1,0 +1,939 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\lstdefinestyle{riskgate}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  backgroundcolor=\color{gray!6}
+}
+\lstset{style=riskgate}
+
+\newcommand{\RiskGate}{\textsc{RiskGate}}
+\newcommand{\MXN}{\mathrm{MXN}}
+\newcommand{\USD}{\mathrm{USD}}
+\newcommand{\indicator}[1]{\mathbb{1}\{#1\}}
+\newcommand{\clamp}{\operatorname{clamp}}
+
+\title{\RiskGate{} Technical Overview and Trade Model Specification}
+\author{Prepared for the RiskGate local-first MVP}
+\date{May 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\RiskGate{} is a local-first portfolio and options risk-management application. It was built to manually track portfolio holdings, import GBM portfolio spreadsheets, keep separate account-level portfolios, monitor watchlist tickers, document option trade ideas, score those trade ideas with a rules-based model, and assign conservative risk sizes. This document explains what has been built, how the app functions, how data is stored, and the exact mathematical approach behind the current trade approval model.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Purpose of the Application}
+
+\RiskGate{} was designed as a decision-support system for manual stock and options trading. Its purpose is not to execute orders, predict the future, or connect directly to a broker account. Instead, it helps enforce process discipline:
+
+\begin{itemize}[noitemsep]
+  \item keep multiple portfolios separate;
+  \item import manually exported GBM portfolio data;
+  \item track positions, cash, exposure, and allocation;
+  \item maintain a watchlist of followed tickers;
+  \item force every options trade idea to include a written thesis, invalidation level, max loss, and exit plan;
+  \item score trade ideas using market, technical, options-quality, and trade-quality inputs;
+  \item reject incomplete or unsafe options setups;
+  \item calculate a suggested risk amount using account-level caps; and
+  \item record entered and closed trades in a journal for later review.
+\end{itemize}
+
+The key rule of the system is:
+
+\begin{quote}
+No options trade should be approved unless the written plan, weighted score, liquidity checks, expiration rules, and portfolio risk caps all pass.
+\end{quote}
+
+\section{Technology Stack}
+
+The current MVP is a local web application, intended to run on the user's machine. It is not yet packaged as a Windows executable.
+
+\begin{longtable}{p{0.25\linewidth} p{0.65\linewidth}}
+\toprule
+\textbf{Layer} & \textbf{Implementation} \\
+\midrule
+Frontend & Next.js, React, TypeScript \\
+Styling & Tailwind CSS \\
+Database & SQLite \\
+Database client & Prisma Client \\
+Charts & Recharts \\
+Icons & Lucide React \\
+Excel import & \texttt{read-excel-file} package \\
+Quote refresh & Yahoo Finance public chart endpoint, used as an unofficial read-only source \\
+Runtime & Node.js local development server \\
+\bottomrule
+\end{longtable}
+
+\subsection{Local-first Design}
+
+The local-first design was chosen because this app handles financial information. The MVP avoids:
+
+\begin{itemize}[noitemsep]
+  \item storing GBM or broker passwords;
+  \item scraping broker login pages;
+  \item syncing private data to the cloud;
+  \item automated trading;
+  \item order placement APIs.
+\end{itemize}
+
+This makes the first version safer. The app can later be wrapped with Tauri or Electron to create a Windows executable, but the current implementation is optimized for fast iteration.
+
+\section{Application Modules and Screens}
+
+\subsection{Sidebar and Portfolio Switching}
+
+The sidebar contains navigation and a portfolio selector. The current app supports multiple portfolios. A selected portfolio is carried through the app using the URL query parameter:
+
+\begin{lstlisting}
+?portfolio=<portfolioId>
+\end{lstlisting}
+
+This matters because the app does not treat all data as one combined account. Positions, watchlist items, trade ideas, journal stats, and risk settings are scoped to the selected portfolio.
+
+\subsection{Dashboard}
+
+The Dashboard summarizes the selected portfolio.
+
+It shows:
+
+\begin{itemize}[noitemsep]
+  \item total tracked equity;
+  \item cash;
+  \item stock and ETF exposure;
+  \item options exposure;
+  \item options risk used;
+  \item monthly options loss cap;
+  \item open trade count;
+  \item model-approved trade ideas;
+  \item allocation chart;
+  \item equity curve;
+  \item risk exposure chart;
+  \item recent trade ideas and their decisions.
+\end{itemize}
+
+\subsection{Portfolio}
+
+The Portfolio page lets the user manually create, edit, and delete positions. It also contains the GBM Excel import panel.
+
+Each position has:
+
+\begin{itemize}[noitemsep]
+  \item symbol;
+  \item asset type: stock, ETF, option, or cash;
+  \item market: MX or US;
+  \item quantity;
+  \item average cost;
+  \item current price;
+  \item currency;
+  \item account/source label;
+  \item notes.
+\end{itemize}
+
+\subsection{GBM Excel Import}
+
+The Portfolio page includes an \textit{Import GBM Excel} form. It accepts a GBM portfolio detail workbook. The first supported format is the GBM USA portfolio spreadsheet with rows like:
+
+\begin{lstlisting}
+Emisora/Fondo | Titulos | Costo promedio | Precio mercado | ... | Valor mercado | ...
+META
+NVDA
+QQQ
+SPY
+efectivo
+\end{lstlisting}
+
+The importer:
+
+\begin{enumerate}[noitemsep]
+  \item reads the uploaded Excel file;
+  \item ignores section headers such as \texttt{Mercado de Capitales USA}, \texttt{Liquidez}, and repeated table headers;
+  \item parses ticker rows;
+  \item converts \texttt{efectivo} into a \texttt{CASH} position;
+  \item identifies common ETFs such as \texttt{SPY}, \texttt{QQQ}, \texttt{VOO}, etc.;
+  \item optionally converts USD values to MXN using the user-entered USD/MXN exchange rate;
+  \item either replaces all positions in the selected portfolio or updates matching symbols and inserts new ones.
+\end{enumerate}
+
+\subsection{Watchlist}
+
+The Watchlist page stores followed tickers for each portfolio. The app currently seeds common market and holding symbols:
+
+\begin{lstlisting}
+SPY, QQQ, ^VIX, META, NVDA, AAPL
+\end{lstlisting}
+
+The user can:
+
+\begin{itemize}[noitemsep]
+  \item add tickers;
+  \item edit ticker metadata;
+  \item delete tickers;
+  \item manually edit latest price values;
+  \item refresh a single quote;
+  \item refresh all Yahoo-sourced quotes in the selected portfolio.
+\end{itemize}
+
+The watchlist currently stores:
+
+\begin{itemize}[noitemsep]
+  \item symbol;
+  \item name;
+  \item market;
+  \item currency;
+  \item data source;
+  \item current price;
+  \item previous close;
+  \item daily change;
+  \item daily change percentage;
+  \item last updated timestamp;
+  \item notes.
+\end{itemize}
+
+At this stage, watchlist quote data is not yet used to automatically calculate RSI, moving averages, market breadth, or options-chain liquidity. It is the foundation for that future automation.
+
+\subsection{Trade Ideas}
+
+The Trade Ideas page is the core risk gate. Every possible options trade should be written here before entry.
+
+The trade idea form captures:
+
+\begin{itemize}[noitemsep]
+  \item symbol;
+  \item direction: bullish, bearish, or neutral;
+  \item strategy: long call, long put, debit spread, protective put;
+  \item thesis;
+  \item catalyst;
+  \item invalidation level;
+  \item target price;
+  \item expiration date;
+  \item premium cost;
+  \item max loss;
+  \item expected reward;
+  \item exit plan;
+  \item market-regime inputs;
+  \item technical inputs;
+  \item options-quality inputs;
+  \item chasing flag.
+\end{itemize}
+
+The app evaluates and stores:
+
+\begin{itemize}[noitemsep]
+  \item market regime score;
+  \item technical score;
+  \item options quality score;
+  \item trade quality score;
+  \item total score;
+  \item decision;
+  \item suggested risk in MXN;
+  \item reasons;
+  \item warnings.
+\end{itemize}
+
+\subsection{Risk Model}
+
+The Risk Model page shows the weighted model, decision bands, sizing formula, risk usage, scored ideas, and recent model results.
+
+\subsection{Model Guide}
+
+The Model Guide explains the logic behind the model in the app. It includes:
+
+\begin{itemize}[noitemsep]
+  \item the weighted-score structure;
+  \item point adjustments for every module;
+  \item hard stops;
+  \item sizing formula;
+  \item watchlist tracking;
+  \item limitations;
+  \item future data integrations.
+\end{itemize}
+
+\subsection{Journal}
+
+The Journal records entered and closed trades. It tracks:
+
+\begin{itemize}[noitemsep]
+  \item linked trade idea;
+  \item entry date;
+  \item exit date;
+  \item entry price;
+  \item exit price;
+  \item realized P\&L;
+  \item result: win, loss, breakeven;
+  \item mistake tags;
+  \item notes.
+\end{itemize}
+
+The app calculates:
+
+\begin{itemize}[noitemsep]
+  \item win rate;
+  \item average win;
+  \item average loss;
+  \item expectancy;
+  \item total options P\&L.
+\end{itemize}
+
+\subsection{Settings}
+
+The Settings page manages:
+
+\begin{itemize}[noitemsep]
+  \item portfolio accounts;
+  \item account names and institutions;
+  \item account base currencies;
+  \item account notes;
+  \item total portfolio value;
+  \item options sleeve;
+  \item base risk per trade;
+  \item monthly options loss cap;
+  \item open options risk cap.
+\end{itemize}
+
+\section{Database Model}
+
+The SQLite database is accessed through Prisma. The major entities are:
+
+\begin{longtable}{p{0.22\linewidth} p{0.68\linewidth}}
+\toprule
+\textbf{Model} & \textbf{Purpose} \\
+\midrule
+\texttt{Portfolio} & Represents a separate account or portfolio, such as one GBM account per person. \\
+\texttt{Position} & Stores manual or imported holdings, scoped to a portfolio. \\
+\texttt{WatchlistItem} & Stores followed tickers and quote data, scoped to a portfolio. \\
+\texttt{TradeIdea} & Stores pre-trade option ideas, inputs, scores, decision, warnings, and suggested risk. \\
+\texttt{ModelScore} & Stores a normalized score record linked one-to-one to a trade idea. \\
+\texttt{RiskSettings} & Stores portfolio-level risk limits and sizing parameters. \\
+\texttt{TradeJournal} & Stores entered and closed trades linked to trade ideas. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Portfolio Isolation}
+
+The following models carry a \texttt{portfolioId}:
+
+\begin{itemize}[noitemsep]
+  \item \texttt{Position};
+  \item \texttt{TradeIdea};
+  \item \texttt{RiskSettings};
+  \item \texttt{WatchlistItem}.
+\end{itemize}
+
+This means each account can have its own holdings, watchlist, trade ideas, and risk settings. Journal entries are linked through trade ideas, so they are indirectly portfolio-scoped.
+
+\section{Portfolio and Journal Calculations}
+
+\subsection{Position Calculations}
+
+For a position \(i\):
+
+\begin{align}
+\text{MarketValue}_i &= \text{Quantity}_i \times \text{CurrentPrice}_i, \\
+\text{CostBasis}_i &= \text{Quantity}_i \times \text{AverageCost}_i, \\
+\text{UnrealizedPnL}_i &= \text{MarketValue}_i - \text{CostBasis}_i, \\
+\text{UnrealizedPnLPercent}_i &=
+  \begin{cases}
+    \frac{\text{UnrealizedPnL}_i}{\text{CostBasis}_i} \times 100, & \text{if CostBasis}_i > 0, \\
+    0, & \text{otherwise}.
+  \end{cases}
+\end{align}
+
+Portfolio weight:
+
+\begin{equation}
+\text{Weight}_i = \frac{\text{MarketValue}_i}{\text{TotalPortfolioValue}} \times 100.
+\end{equation}
+
+\subsection{Exposure Calculations}
+
+The app groups position values by asset type:
+
+\begin{align}
+\text{Cash} &= \sum_{i \in \text{cash}} \text{MarketValue}_i, \\
+\text{StocksAndETFs} &= \sum_{i \in \{\text{stock}, \text{etf}\}} \text{MarketValue}_i, \\
+\text{OptionsExposure} &= \sum_{i \in \text{option}} \text{MarketValue}_i.
+\end{align}
+
+\subsection{Journal Statistics}
+
+For closed journal entries:
+
+\begin{align}
+\text{WinRate} &= \frac{\#\text{WinningTrades}}{\#\text{ClosedTrades}} \times 100, \\
+\text{AverageWin} &= \frac{\sum \text{PositiveRealizedPnL}}{\#\text{WinningTrades}}, \\
+\text{AverageLoss} &= \frac{\sum \text{NegativeRealizedPnL}}{\#\text{LosingTrades}}, \\
+\text{Expectancy} &= \left(\frac{\text{WinRate}}{100}\right)\text{AverageWin}
+ + \left(\frac{\text{LossRate}}{100}\right)\text{AverageLoss}.
+\end{align}
+
+Average loss is stored as a negative number in the current implementation, so expectancy naturally subtracts losses.
+
+\section{Trade Idea Model: Mathematical Specification}
+
+\subsection{High-level Structure}
+
+The model has four scoring modules:
+
+\begin{longtable}{p{0.25\linewidth} p{0.15\linewidth} p{0.50\linewidth}}
+\toprule
+\textbf{Module} & \textbf{Weight} & \textbf{Purpose} \\
+\midrule
+Market regime & 30\% & Broad market context using SPY, QQQ, VIX, breadth, and macro risk. \\
+Technical setup & 30\% & Directional alignment with trend, moving averages, RSI, volume, support/resistance. \\
+Options quality & 25\% & Contract quality using spread, volume, open interest, DTE, IV rank, and premium size. \\
+Trade quality & 15\% & Discipline of the written plan, catalyst, invalidation, exit, reward/risk, and chasing flag. \\
+\bottomrule
+\end{longtable}
+
+Every module follows the same pattern:
+
+\begin{equation}
+\text{ModuleScore} = \clamp(\text{BaseScore} + \sum \text{RuleAdjustments}, 0, 100).
+\end{equation}
+
+The clamp function is:
+
+\begin{equation}
+\clamp(x, 0, 100) = \min(100, \max(0, x)).
+\end{equation}
+
+The total score is:
+
+\begin{equation}
+\text{TotalScore}
+= 0.30M + 0.30T + 0.25O + 0.15Q,
+\end{equation}
+
+where:
+
+\begin{itemize}[noitemsep]
+  \item \(M\) is market regime score;
+  \item \(T\) is technical setup score;
+  \item \(O\) is options quality score;
+  \item \(Q\) is trade quality score.
+\end{itemize}
+
+\subsection{Market Regime Score}
+
+The market score starts at 50:
+
+\begin{equation}
+M_0 = 50.
+\end{equation}
+
+The current implementation is:
+
+\begin{align}
+M = \clamp(&50
+ + 15\indicator{\text{SPY bullish}}
+ - 15\indicator{\text{SPY bearish}} \notag \\
+&+ 15\indicator{\text{QQQ bullish}}
+ - 15\indicator{\text{QQQ bearish}} \notag \\
+&+ 10\indicator{\text{breadth strong}}
+ - 10\indicator{\text{breadth weak}} \notag \\
+&+ 5\indicator{\text{VIX low}}
+ - 10\indicator{\text{VIX elevated}}
+ - 25\indicator{\text{VIX spiking}} \notag \\
+&+ 5\indicator{\text{macro risk low}}
+ - 20\indicator{\text{macro risk high}},
+0,100).
+\end{align}
+
+\subsubsection{Interpretation}
+
+A bullish trade gets a better environment when SPY and QQQ are bullish, breadth is strong, VIX is low, and macro risk is low. A high-volatility or high-macro-risk environment penalizes the score because options can become expensive and direction can become less reliable.
+
+\subsection{Technical Setup Score}
+
+The technical score starts at 50:
+
+\begin{equation}
+T_0 = 50.
+\end{equation}
+
+The current implementation is:
+
+\begin{align}
+T = \clamp(&50
+ + 18\indicator{\text{trend up and direction bullish}}
+ + 18\indicator{\text{trend down and direction bearish}} \notag \\
+&+ 12\indicator{\text{trend sideways and direction neutral}}
+ - 15\indicator{\text{trend up and direction bearish}} \notag \\
+&- 15\indicator{\text{trend down and direction bullish}} \notag \\
+&+ 8\indicator{\text{price above 20MA and not bearish}}
+ - 6\indicator{\text{price above 20MA and bearish}} \notag \\
+&+ 10\indicator{\text{price above 50MA and not bearish}}
+ - 8\indicator{\text{price above 50MA and bearish}} \notag \\
+&+ 8\indicator{\text{RSI oversold and bullish}}
+ + 8\indicator{\text{RSI overbought and bearish}} \notag \\
+&- 8\indicator{\text{RSI overbought and bullish}} \notag \\
+&+ 8\indicator{\text{volume strong}}
+ - 8\indicator{\text{volume weak}} \notag \\
+&+ 10\indicator{\text{support/resistance good}}
+ - 15\indicator{\text{support/resistance poor}},
+0,100).
+\end{align}
+
+\subsubsection{Interpretation}
+
+The technical module rewards alignment. Bullish ideas are rewarded when the asset is in an uptrend and above moving averages. Bearish ideas are rewarded when the asset is in a downtrend. The score penalizes fighting the trend, weak volume, and poor support/resistance structure.
+
+\subsection{Options Quality Score}
+
+The options quality score starts at 65:
+
+\begin{equation}
+O_0 = 65.
+\end{equation}
+
+The higher base reflects that the model is not trying to reward a subjective thesis here; it is checking whether the contract is tradable. The current formula is:
+
+\begin{align}
+O = \clamp(&65
+ + 15\indicator{\text{spread} \le 5\%}
+ - 8\indicator{\text{spread} > 5\%} \notag \\
+&- 18\indicator{\text{spread} > 10\%}
+ - 35\indicator{\text{spread} > 15\%} \notag \\
+&+ 8\indicator{\text{option volume} \ge 500}
+ - 15\indicator{\text{option volume} < 50} \notag \\
+&+ 8\indicator{\text{open interest} \ge 1000}
+ - 15\indicator{\text{open interest} < 100} \notag \\
+&+ 10\indicator{21 \le \text{DTE} \le 60}
+ - 40\indicator{\text{DTE} < 7} \notag \\
+&- 8\indicator{\text{DTE} > 120}
+ + 5\indicator{\text{premium} \le 0.5\%\text{ of portfolio}} \notag \\
+&- 30\indicator{\text{premium} > 1\%\text{ of portfolio}}
+ - 15\indicator{\text{IV rank} > 80},
+0,100).
+\end{align}
+
+\subsubsection{Interpretation}
+
+This module is intentionally strict. A good stock setup can still be a bad options trade if:
+
+\begin{itemize}[noitemsep]
+  \item the bid/ask spread is too wide;
+  \item volume is too low;
+  \item open interest is too low;
+  \item expiration is too close;
+  \item premium is too large relative to the portfolio;
+  \item implied volatility is unusually high.
+\end{itemize}
+
+\subsection{Trade Quality Score}
+
+The trade quality score starts at 40:
+
+\begin{equation}
+Q_0 = 40.
+\end{equation}
+
+Let:
+
+\begin{equation}
+R =
+\begin{cases}
+\frac{\text{ExpectedReward}}{\text{MaxLoss}}, & \text{if ExpectedReward exists and MaxLoss} > 0,\\
+0, & \text{otherwise}.
+\end{cases}
+\end{equation}
+
+Then:
+
+\begin{align}
+Q = \clamp(&40
+ + 20\indicator{\text{thesis length} \ge 30}
+ + 8\indicator{\text{catalyst exists}} \notag \\
+&+ 12\indicator{\text{invalidation level exists}}
+ + 12\indicator{\text{exit plan exists}} \notag \\
+&+ 10\indicator{R \ge 2}
+ - 12\indicator{0 < R < 1.5}
+ - 25\indicator{\text{is chasing}},
+0,100).
+\end{align}
+
+\subsubsection{Interpretation}
+
+The trade quality score rewards disciplined planning. It is less about market forecasting and more about whether the trader has written down:
+
+\begin{itemize}[noitemsep]
+  \item why the trade exists;
+  \item what invalidates the setup;
+  \item how much can be lost;
+  \item when to exit;
+  \item whether the reward justifies the risk.
+\end{itemize}
+
+\section{Decision Logic}
+
+\subsection{Initial Decision}
+
+After calculating total score:
+
+\begin{longtable}{p{0.25\linewidth} p{0.35\linewidth}}
+\toprule
+\textbf{Total Score} & \textbf{Initial Decision} \\
+\midrule
+\(S < 60\) & reject \\
+\(60 \le S < 75\) & watchlist \\
+\(75 \le S < 85\) & approved small \\
+\(S \ge 85\) & approved normal \\
+\bottomrule
+\end{longtable}
+
+\subsection{Hard Stop Override}
+
+Even if the total score is high, hard stops force the final decision to reject.
+
+Hard stops are:
+
+\begin{itemize}[noitemsep]
+  \item no written thesis;
+  \item no invalidation level;
+  \item max loss missing or \(\le 0\);
+  \item no exit plan;
+  \item bid/ask spread greater than 15\%;
+  \item days to expiration less than 7;
+  \item premium greater than 1\% of portfolio;
+  \item option volume less than 25 and open interest less than 100.
+\end{itemize}
+
+In symbols:
+
+\begin{equation}
+\text{FinalDecision} =
+\begin{cases}
+\text{reject}, & \text{if any hard stop is true}, \\
+\text{InitialDecision}, & \text{otherwise}.
+\end{cases}
+\end{equation}
+
+\section{Risk Sizing Model}
+
+\subsection{Base Settings}
+
+For the default 100,000 MXN account:
+
+\begin{longtable}{p{0.45\linewidth} p{0.25\linewidth}}
+\toprule
+\textbf{Setting} & \textbf{Default} \\
+\midrule
+Total portfolio value & 100,000 MXN \\
+Options sleeve percent & 3\% \\
+Max options sleeve & 3,000 MXN \\
+Base risk per trade percent & 0.5\% \\
+Base risk per trade & 500 MXN \\
+Max monthly options loss percent & 1\% \\
+Max monthly options loss & 1000 MXN \\
+Max open options risk percent & 2\% \\
+Max open options risk & 2,000 MXN \\
+\bottomrule
+\end{longtable}
+
+\subsection{Uncapped Suggested Risk}
+
+The uncapped risk formula is:
+
+\begin{equation}
+\text{UncappedRisk}
+= B \times C(S) \times L(\text{spread}) \times G(\text{regime}, \text{direction}) \times V(\text{IV rank}),
+\end{equation}
+
+where:
+
+\begin{itemize}[noitemsep]
+  \item \(B\) is base risk per trade in MXN;
+  \item \(C(S)\) is confidence multiplier;
+  \item \(L\) is liquidity multiplier;
+  \item \(G\) is market regime multiplier;
+  \item \(V\) is volatility multiplier.
+\end{itemize}
+
+\subsection{Confidence Multiplier}
+
+\[
+C(S) =
+\begin{cases}
+0, & S < 75,\\
+0.25, & 75 \le S < 80,\\
+0.50, & 80 \le S < 85,\\
+0.75, & 85 \le S < 90,\\
+1.00, & S \ge 90.
+\end{cases}
+\]
+
+\subsection{Liquidity Multiplier}
+
+\[
+L(\text{spread}) =
+\begin{cases}
+0, & \text{spread} > 15\%,\\
+0.25, & 10\% < \text{spread} \le 15\%,\\
+0.50, & 5\% < \text{spread} \le 10\%,\\
+1.00, & \text{spread} \le 5\%.
+\end{cases}
+\]
+
+\subsection{Market Regime Multiplier}
+
+The current code uses SPY trend as the primary regime proxy:
+
+\[
+G =
+\begin{cases}
+1.00, & \text{SPY bullish and trade bullish},\\
+1.00, & \text{SPY bearish and trade bearish},\\
+0.50, & \text{SPY neutral},\\
+0.25, & \text{otherwise}.
+\end{cases}
+\]
+
+\subsection{Volatility Multiplier}
+
+\[
+V(\text{IV rank}) =
+\begin{cases}
+1.00, & \text{IV rank missing},\\
+0.25, & \text{IV rank} > 80,\\
+0.50, & 60 < \text{IV rank} \le 80,\\
+0.75, & \text{IV rank} < 20,\\
+1.00, & 20 \le \text{IV rank} \le 60.
+\end{cases}
+\]
+
+\subsection{Final Caps}
+
+The final risk is capped by portfolio-level remaining limits:
+
+\begin{align}
+\text{RemainingSleeve} &= \max(\text{MaxOptionsSleeve} - \text{OptionsRiskUsed}, 0), \\
+\text{RemainingMonthlyLoss} &= \max(\text{MonthlyLossCap} - \text{MonthlyLossUsed}, 0), \\
+\text{RemainingOpenRisk} &= \max(\text{OpenRiskCap} - \text{OpenRiskUsed}, 0).
+\end{align}
+
+Then:
+
+\begin{equation}
+\text{SuggestedRisk} =
+\begin{cases}
+\min(\text{UncappedRisk}, \text{RemainingSleeve}, \text{RemainingMonthlyLoss}, \text{RemainingOpenRisk}), & \text{if approved},\\
+0, & \text{otherwise}.
+\end{cases}
+\end{equation}
+
+\section{Example Risk Calculation}
+
+Suppose:
+
+\begin{itemize}[noitemsep]
+  \item total score is \(82\);
+  \item base risk is \(500\) MXN;
+  \item bid/ask spread is 7\%;
+  \item SPY is bullish and the trade is bullish;
+  \item IV rank is 42;
+  \item all caps have enough room.
+\end{itemize}
+
+Then:
+
+\[
+C(82) = 0.50,\quad L(7\%) = 0.50,\quad G = 1.00,\quad V(42) = 1.00.
+\]
+
+\[
+\text{UncappedRisk} = 500 \times 0.50 \times 0.50 \times 1.00 \times 1.00 = 125 \text{ MXN}.
+\]
+
+Rounded:
+
+\[
+\text{SuggestedRisk} \approx 125 \text{ MXN}.
+\]
+
+If any cap has less than 125 MXN remaining, the final suggested risk is reduced to that cap.
+
+\section{Current Limitations}
+
+\begin{itemize}[noitemsep]
+  \item Market regime inputs are manually selected.
+  \item Technical inputs are manually selected.
+  \item Watchlist quotes do not yet calculate moving averages, RSI, or trend.
+  \item Options chains are not yet fetched automatically.
+  \item Bid, ask, mid, Greeks, implied volatility, volume, and open interest are entered manually.
+  \item Strategy-specific payoff diagrams are not yet implemented.
+  \item The model does not backtest rules against historical trades.
+  \item The model does not calculate probability of profit.
+  \item The model does not automatically detect earnings dates or macro events.
+  \item The model does not yet adjust for sector concentration or correlation.
+\end{itemize}
+
+\section{Future Robustness Layers}
+
+\subsection{Layer 1: Read-only Market Data}
+
+The next logical step is a read-only Options Chain Analyzer. It would pull:
+
+\begin{itemize}[noitemsep]
+  \item expirations;
+  \item strikes;
+  \item bid and ask;
+  \item midpoint;
+  \item bid/ask spread percentage;
+  \item option volume;
+  \item open interest;
+  \item implied volatility;
+  \item Greeks, if available;
+  \item days to expiration.
+\end{itemize}
+
+Then it could pre-fill the options-quality section of the trade idea form.
+
+\subsection{Layer 2: Technical Indicator Automation}
+
+The Watchlist can be extended to store historical prices. From that, RiskGate could calculate:
+
+\begin{align}
+\text{SMA}_{20}(t) &= \frac{1}{20}\sum_{k=0}^{19} P_{t-k},\\
+\text{SMA}_{50}(t) &= \frac{1}{50}\sum_{k=0}^{49} P_{t-k}.
+\end{align}
+
+RSI could be calculated with the standard 14-period approach:
+
+\begin{align}
+RS &= \frac{\text{AverageGain}_{14}}{\text{AverageLoss}_{14}},\\
+RSI &= 100 - \frac{100}{1 + RS}.
+\end{align}
+
+These indicators could automatically fill:
+
+\begin{itemize}[noitemsep]
+  \item trend;
+  \item price versus 20MA;
+  \item price versus 50MA;
+  \item RSI condition;
+  \item volume condition.
+\end{itemize}
+
+\subsection{Layer 3: Strategy-specific Logic}
+
+Future versions should score strategies differently:
+
+\begin{itemize}[noitemsep]
+  \item long calls should require directional momentum and controlled premium;
+  \item long puts should require downside trend confirmation or hedge rationale;
+  \item debit spreads should calculate width, max gain, max loss, break-even, and reward/risk;
+  \item protective puts should compare hedge cost against protected notional value and drawdown risk.
+\end{itemize}
+
+\subsection{Layer 4: Backtesting and Feedback}
+
+The journal can be used to determine whether the model works:
+
+\begin{itemize}[noitemsep]
+  \item win rate by score band;
+  \item average P\&L by score band;
+  \item expectancy by strategy;
+  \item expectancy by module score;
+  \item common mistake tags in losing trades;
+  \item comparison of approved trades versus watchlist/rejected trades.
+\end{itemize}
+
+\subsection{Layer 5: External Integrations}
+
+Potential data/integration providers:
+
+\begin{itemize}[noitemsep]
+  \item Tradier: \url{https://docs.tradier.com/reference/brokerage-api-markets-get-options-chains}
+  \item Polygon.io: \url{https://polygon.io/docs/rest/options/overview}
+  \item MarketData.app: \url{https://www.marketdata.app/docs/api/}
+  \item Alpaca: \url{https://docs.alpaca.markets/docs/options-trading}
+\end{itemize}
+
+The recommended path is read-only data first. Trading automation should remain out of scope until the app has reliable data handling, testing, audit logging, and explicit confirmation flows.
+
+\section{How to Run the App}
+
+From the project folder:
+
+\begin{lstlisting}
+npm install
+npm run prisma:generate
+npm run db:init
+npm run seed
+npm run db:migrate:watchlist
+npm run dev
+\end{lstlisting}
+
+Then open:
+
+\begin{lstlisting}
+http://127.0.0.1:3000
+\end{lstlisting}
+
+\section{Files of Interest}
+
+\begin{longtable}{p{0.35\linewidth} p{0.55\linewidth}}
+\toprule
+\textbf{File} & \textbf{Purpose} \\
+\midrule
+\texttt{lib/risk.ts} & Core scoring, decision, hard-stop, and sizing model. \\
+\texttt{lib/calculations.ts} & Portfolio, P\&L, risk usage, and journal statistics. \\
+\texttt{app/actions.ts} & Server actions for CRUD, Excel import, scoring, settings, watchlist refresh. \\
+\texttt{prisma/schema.prisma} & Database schema. \\
+\texttt{app/page.tsx} & Dashboard. \\
+\texttt{app/portfolio/page.tsx} & Portfolio positions and GBM Excel import. \\
+\texttt{app/watchlist/page.tsx} & Ticker tracking and quote refresh. \\
+\texttt{app/trade-ideas/page.tsx} & Trade idea form and score display. \\
+\texttt{app/risk-model/page.tsx} & Risk model dashboard. \\
+\texttt{app/model-guide/page.tsx} & In-app explanation of the scoring model. \\
+\texttt{app/journal/page.tsx} & Trade journal. \\
+\texttt{app/settings/page.tsx} & Portfolio accounts and risk settings. \\
+\bottomrule
+\end{longtable}
+
+\section{Safety Notes}
+
+\begin{itemize}[noitemsep]
+  \item Options are risky and can expire worthless.
+  \item \RiskGate{} is a decision-support tool, not financial advice.
+  \item The app should not store broker passwords.
+  \item Broker scraping should be avoided.
+  \item Read-only integrations should come before any order-entry workflow.
+  \item The current model is a rule-based checklist, not a predictive machine-learning model.
+\end{itemize}
+
+\section{Conclusion}
+
+\RiskGate{} now includes the core building blocks for disciplined options decision-making: portfolio isolation, manual and imported positions, watchlist tracking, a formal trade idea gate, a transparent scoring model, dynamic sizing, and a trade journal. The most important future improvement is to automate objective inputs while keeping the final approval manual. A read-only options-chain and market-data layer would make the model more robust without introducing the risks of broker credential storage or automated trading.
+
+\end{document}

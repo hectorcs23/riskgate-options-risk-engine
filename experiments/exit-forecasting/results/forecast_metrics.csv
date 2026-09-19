@@ -1,0 +1,2 @@
+model,mean_crps,directional_accuracy,negative_brier,interval_90_coverage
+DeepAR-style,0.0129196179611305,0.4621664050235479,0.3321890302490461,0.8367346938775511

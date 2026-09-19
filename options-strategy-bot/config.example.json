@@ -1,0 +1,50 @@
+{
+  "bot_name": "Options Strategy Research Bot",
+  "initial_equity_mxn": 100000,
+  "usd_mxn": 17.0,
+  "risk": {
+    "max_risk_per_trade_mxn": 3000,
+    "max_open_positions": 5,
+    "max_daily_candidates": 10,
+    "max_symbol_weight": 0.25
+  },
+  "universe": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "AMD",
+    "AVGO",
+    "JPM",
+    "V",
+    "MA",
+    "COST",
+    "DIS",
+    "HD",
+    "UNH"
+  ],
+  "market_symbols": {
+    "spy": "SPY",
+    "qqq": "QQQ",
+    "vix": "VIX"
+  },
+  "strategy": {
+    "enabled": [
+      "bull_call_debit_spread",
+      "bear_put_debit_spread"
+    ],
+    "dte": 45,
+    "hold_days": 10,
+    "min_score_to_enter": 75,
+    "target_reward_risk": 1.5,
+    "prefer_medium_volatility": true,
+    "allow_extended_moves": false
+  },
+  "costs": {
+    "slippage_bps": 75,
+    "commission_per_contract_usd": 0.65
+  }
+}

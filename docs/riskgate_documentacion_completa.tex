@@ -1,0 +1,874 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ==========================================================
+%  RiskGate - Documentación técnica completa (español)
+% ==========================================================
+
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue,
+  pdftitle={RiskGate - Documentacion tecnica completa},
+  pdfauthor={RiskGate}
+}
+
+\definecolor{rgcode}{gray}{0.96}
+\lstdefinestyle{riskgate}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  backgroundcolor=\color{rgcode},
+  keepspaces=true,
+  showstringspaces=false
+}
+\lstset{style=riskgate}
+
+\newcommand{\RiskGate}{\textsc{RiskGate}}
+\newcommand{\MXN}{\ensuremath{\mathrm{MXN}}}
+\newcommand{\USD}{\ensuremath{\mathrm{USD}}}
+\newcommand{\ind}[1]{\mathbb{1}\{#1\}}
+\newcommand{\clp}{\operatorname{clamp}}
+\setlist[itemize]{leftmargin=1.3em}
+\setlist[enumerate]{leftmargin=1.5em}
+
+\title{\textbf{\RiskGate}\\[2mm]
+\large Documentación técnica completa del proyecto\\
+y recomendaciones de evolución}
+\author{Proyecto \RiskGate{} --- MVP local-first}
+\date{Mayo de 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent
+\RiskGate{} es una aplicación \emph{local-first} de gestión de portafolio y de
+riesgo en opciones. Su función no es ejecutar órdenes, predecir precios ni dar
+asesoría financiera, sino \textbf{imponer disciplina de proceso} antes de
+entrar a una operación: obliga a documentar cada idea de trade, la evalúa con un
+modelo cuantitativo transparente, rechaza estructuras incompletas o ilíquidas y
+asigna un tamaño de riesgo conservador acotado por los límites de la cuenta.
+Este documento describe de forma exhaustiva la arquitectura, el modelo de datos,
+las pantallas, el motor de evaluación (puntaje ponderado adaptativo, calidad de
+opciones continua, indicadores técnicos, analítica probabilística, simulación
+Monte Carlo, sentimiento de Reddit y concentración sectorial), el bot de
+investigación en Python y un conjunto detallado de recomendaciones y
+modificaciones de \emph{proxies} para hacer el sistema más robusto.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ==========================================================
+\section{Propósito y filosofía del sistema}
+% ==========================================================
+
+\RiskGate{} fue diseñado como un sistema de apoyo a la decisión para trading
+manual de acciones y opciones. La regla central que gobierna todo el diseño es:
+
+\begin{quote}
+\itshape
+Ninguna operación de opciones debe aprobarse a menos que el plan escrito, el
+puntaje ponderado, los controles de liquidez, las reglas de vencimiento y los
+topes de riesgo del portafolio se cumplan simultáneamente.
+\end{quote}
+
+Los objetivos concretos del sistema son:
+
+\begin{itemize}[noitemsep]
+  \item mantener varios portafolios (cuentas) aislados entre sí;
+  \item importar datos de portafolio exportados manualmente desde GBM;
+  \item registrar posiciones, efectivo, exposición y asignación de activos;
+  \item mantener una \emph{watchlist} de tickers seguidos por portafolio;
+  \item obligar a que cada idea de opciones tenga tesis escrita, nivel de
+        invalidación, pérdida máxima y plan de salida;
+  \item puntuar ideas combinando contexto de mercado, técnico, calidad del
+        contrato y calidad del plan;
+  \item rechazar configuraciones incompletas o inseguras;
+  \item calcular un tamaño de riesgo sugerido acotado por los límites de cuenta; y
+  \item registrar operaciones entradas y cerradas en una bitácora para revisión.
+\end{itemize}
+
+\subsection{Principios de seguridad (local-first)}
+
+El diseño local-first se eligió porque la aplicación maneja información
+financiera. El MVP evita deliberadamente:
+
+\begin{itemize}[noitemsep]
+  \item almacenar contraseñas de GBM o del broker;
+  \item hacer \emph{scraping} de páginas de inicio de sesión;
+  \item sincronizar datos privados a la nube;
+  \item trading automático o colocación de órdenes.
+\end{itemize}
+
+La base de datos SQLite vive en la máquina del usuario y todas las fuentes
+externas se consumen en modo \emph{solo lectura}.
+
+% ==========================================================
+\section{Arquitectura y stack tecnológico}
+% ==========================================================
+
+El producto se compone de dos piezas independientes:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{La aplicación web} (Next.js / React / TypeScript), que es el MVP
+        principal y contiene el motor de evaluación.
+  \item \textbf{El bot de investigación} (\texttt{options-strategy-bot}, Python),
+        un banco de pruebas independiente para escanear, puntuar, hacer
+        \emph{backtest} y llevar un libro de \emph{paper trading}.
+\end{enumerate}
+
+\begin{longtable}{p{0.30\linewidth} p{0.62\linewidth}}
+\toprule
+\textbf{Capa} & \textbf{Implementación} \\
+\midrule
+Frontend & Next.js (App Router), React, TypeScript \\
+Estilos & Tailwind CSS, \texttt{@tailwindcss/forms} \\
+Lógica de servidor & Server Actions de Next.js (\texttt{app/actions.ts}) \\
+Base de datos & SQLite \\
+ORM & Prisma Client (\texttt{@prisma/client} v6) \\
+Gráficas & Recharts \\
+Iconos & Lucide React \\
+Validación & Zod \\
+Importación Excel & paquete \texttt{read-excel-file} \\
+Datos de mercado & Yahoo Finance (endpoint público de \emph{chart}) \\
+Cadena de opciones & Alpaca Options Data API (solo lectura, opcional) \\
+Bot de investigación & Python 3, Black--Scholes propio, Yahoo/Alpaca/CSV \\
+Runtime & Servidor de desarrollo local de Node.js \\
+\bottomrule
+\end{longtable}
+
+\noindent
+Todas las páginas se sirven con \texttt{dynamic = "force-dynamic"} para reflejar
+datos en tiempo real. Cada operación de mutación se ejecuta como \emph{server
+action} y revalida las rutas afectadas tras escribir en la base de datos.
+
+% ==========================================================
+\section{Modelo de datos}
+% ==========================================================
+
+El esquema Prisma (SQLite) organiza la información alrededor de la entidad
+\texttt{Portfolio}, que aísla cuentas. Las entidades principales son:
+
+\begin{longtable}{p{0.24\linewidth} p{0.68\linewidth}}
+\toprule
+\textbf{Modelo} & \textbf{Propósito} \\
+\midrule
+\texttt{Portfolio} & Cuenta o portafolio independiente; ancla del aislamiento de datos. \\
+\texttt{Position} & Tenencias manuales o importadas (acción, ETF, opción, efectivo). \\
+\texttt{WatchlistItem} & Tickers seguidos con cotización, cambio diario y fuente. \\
+\texttt{TradeIdea} & Idea de opciones pre-entrada: inputs, puntajes, decisión, riesgo sugerido, razones y advertencias. \\
+\texttt{OptionLeg} & Pierna individual de una estructura multi-leg (tipo, lado, strike, vencimiento, Greeks, IV, OI, volumen). \\
+\texttt{ModelScore} & Registro normalizado de puntaje, uno a uno con la idea. \\
+\texttt{TradeScoreSnapshot} & Foto diaria del puntaje de una idea para seguir su evolución. \\
+\texttt{RiskSettings} & Límites de riesgo y parámetros de dimensionamiento por portafolio. \\
+\texttt{TradeJournal} & Operaciones entradas y cerradas, ligadas a una idea. \\
+\texttt{PriceBar} & Barras OHLCV históricas por símbolo y timeframe. \\
+\texttt{PortfolioSnapshot} & Foto puntual del valor del portafolio (intradía e histórico). \\
+\texttt{RedditDocument} & Documentos de Reddit normalizados para análisis de sentimiento. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Aislamiento por portafolio}
+
+Los modelos \texttt{Position}, \texttt{TradeIdea}, \texttt{RiskSettings},
+\texttt{WatchlistItem}, \texttt{PriceBar} y \texttt{PortfolioSnapshot} llevan un
+campo \texttt{portfolioId}. El portafolio activo se transmite por la URL:
+
+\begin{lstlisting}
+?portfolio=<portfolioId>
+\end{lstlisting}
+
+Las entradas de bitácora se ligan a través de la idea de trade, por lo que están
+indirectamente aisladas por portafolio.
+
+% ==========================================================
+\section{Módulos y pantallas de la aplicación}
+% ==========================================================
+
+La barra lateral (\texttt{components/sidebar.tsx}) contiene el selector de
+portafolio y la navegación a diez pantallas.
+
+\subsection{Dashboard}
+Resume el portafolio seleccionado: equity total, efectivo, exposición a
+acciones/ETF y opciones, cambio intradía, riesgo de opciones utilizado, tope de
+pérdida mensual, gráfica de asignación (pastel), curva de equity, desempeño
+intradía, gráfica de uso de riesgo y la tabla de ideas recientes con su decisión.
+
+\subsection{Portafolio}
+Permite crear, editar y eliminar posiciones e importar el Excel de GBM. Cada
+posición tiene símbolo, tipo de activo, mercado (MX/US), cantidad, costo
+promedio, precio actual, moneda, cuenta y notas. Refresca precios desde Yahoo y
+registra \emph{snapshots} para el desempeño intradía.
+
+\subsection{Importación de Excel de GBM}
+El importador lee el libro de detalle de GBM, ignora encabezados de sección
+(p.\,ej.\ \texttt{Mercado de Capitales USA}, \texttt{Liquidez}), interpreta filas
+de tickers, convierte \texttt{efectivo} en una posición \texttt{CASH}, reconoce
+ETFs comunes y, opcionalmente, convierte valores USD a MXN con el tipo de cambio
+ingresado. Puede reemplazar todas las posiciones o fusionar por símbolo.
+
+\subsection{Watchlist}
+Almacena tickers seguidos por portafolio (símbolo, nombre, mercado, moneda,
+fuente, precio, cierre previo, cambio diario, marca de tiempo). Permite refrescar
+cotizaciones desde Yahoo o editarlas manualmente. Es la base para el cálculo
+automático de indicadores técnicos.
+
+\subsection{Discover}
+Pantalla de descubrimiento: escanea el mercado y la watchlist para encontrar
+candidatos. Filtros por perfil (\emph{quality} o \emph{movers}), puntaje mínimo,
+volumen mínimo e inclusión de Reddit. Muestra puntaje de descubrimiento, sesgo
+(alcista/bajista), volatilidad realizada, menciones en Reddit y probabilidad de
+liquidez de opciones, con botones para añadir a watchlist o crear una idea.
+
+\subsection{Options Chain}
+Navega la cadena de opciones de Alpaca por subyacente, vencimiento y strike.
+Muestra bid/ask/mid, delta, gamma, theta y vega, y permite pre-llenar el
+formulario de idea con el contrato elegido.
+
+\subsection{Trade Ideas}
+Es el \emph{núcleo de la compuerta de riesgo}. Cada posible operación se escribe
+aquí antes de entrar. El formulario captura símbolo, dirección, estrategia,
+tesis, catalizador, nivel de invalidación, objetivo, vencimiento, prima, pérdida
+máxima, recompensa esperada, plan de salida, estructura multi-leg, contexto de
+mercado, señales técnicas e indicador de \emph{chasing}. Por cada idea muestra
+los cuatro puntajes de módulo, la decisión, el riesgo sugerido, la analítica de
+opciones (PoP, EV, Kelly, VaR), el histograma Monte Carlo, el diagrama de payoff,
+el desglose técnico y de calidad de opciones, el sentimiento de Reddit y las
+listas de razones y advertencias.
+
+\subsection{Risk Model}
+Tablero del perfil de riesgo: riesgo base por trade, límite del \emph{sleeve} de
+opciones, pesos por régimen, bandas de decisión, multiplicadores, Greeks
+agregados del portafolio y analítica de concentración.
+
+\subsection{Model Guide}
+Explicación didáctica del modelo dentro de la app: módulos de puntaje, hard
+stops, topes de aprobación, bandas de decisión, fórmula de dimensionamiento,
+metodología de sentimiento y hoja de ruta de robustez.
+
+\subsection{Journal}
+Bitácora de operaciones: enlaza la idea, fechas y precios de entrada/salida, P\&L
+realizado, resultado, etiquetas de error y notas. Calcula \emph{win rate},
+ganancia/pérdida promedio, \emph{expectancy}, proxies de Sharpe y Sortino,
+duración media e intervalos de confianza por \emph{bootstrap}.
+
+\subsection{Settings}
+Gestión de portafolios (crear/editar/eliminar) y de los límites de riesgo:
+valor total, \emph{sleeve} de opciones, riesgo base por trade, tope de pérdida
+mensual, tope de riesgo abierto y la configuración de sentimiento de Reddit.
+
+% ==========================================================
+\section{Pipeline de datos de mercado}
+% ==========================================================
+
+\subsection{Yahoo Finance (\texttt{lib/market-data.ts})}
+Obtiene barras OHLCV (por defecto 6 meses diarios) y cotizaciones. A partir del
+historial construye un \emph{resumen técnico} por símbolo y el
+\texttt{MarketContext} agregado:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Tendencia de régimen}: \emph{uptrend}/\emph{downtrend}/\emph{neutral}
+        según precio vs.\ SMA20/SMA50 y cambio a 20 días.
+  \item \textbf{Condición de VIX}: \emph{low} ($<15$), \emph{normal},
+        \emph{elevated} ($22$--$30$), \emph{spiking} ($\ge 30$ o salto diario
+        $\ge +15\%$).
+  \item \textbf{Amplitud (breadth)}: proporción de símbolos con precio
+        $\ge$ SMA50. \emph{Strong} si $\ge 65\%$, \emph{weak} si $\le 40\%$.
+  \item \textbf{Riesgo macro}: \emph{high} si el VIX está \emph{spiking};
+        \emph{low} si VIX bajo y breadth fuerte; \emph{medium} en otro caso.
+\end{itemize}
+
+\subsection{Alpaca Options Data API (\texttt{lib/alpaca-options.ts})}
+Consulta \emph{snapshots} de la cadena de opciones (Greeks, IV, bid/ask, volumen,
+open interest) en modo solo lectura. Decodifica el símbolo OCC
+\texttt{[ROOT][YY][MM][DD][C/P][STRIKE$\times$1000]} y normaliza respuestas en
+múltiples formatos. Requiere \texttt{APCA\_API\_KEY\_ID} y
+\texttt{APCA\_API\_SECRET\_KEY}; si no están configuradas, la app opera con datos
+manuales.
+
+% ==========================================================
+\section{Motor de evaluación de ideas de trade}
+% ==========================================================
+
+El corazón del sistema es \texttt{evaluateTradeIdea()} en \texttt{lib/risk.ts}.
+A diferencia de versiones anteriores con ajustes discretos, el modelo actual usa
+\textbf{funciones de calidad continuas}, \textbf{pesos adaptativos al régimen} y
+\textbf{capas de superposición} probabilísticas.
+
+\subsection{Estructura general}
+
+El puntaje total se compone de cuatro módulos en escala $[0,100]$:
+
+\begin{longtable}{p{0.24\linewidth} p{0.16\linewidth} p{0.50\linewidth}}
+\toprule
+\textbf{Módulo} & \textbf{Peso típico} & \textbf{Propósito} \\
+\midrule
+Régimen de mercado ($M$) & 25--35\% & Contexto amplio: SPY, QQQ, VIX, breadth, macro. \\
+Técnico ($T$) & 20--30\% & Alineación direccional con tendencia, medias, RSI, volumen, S/R. \\
+Calidad de opciones ($O$) & 25--35\% & Liquidez y estructura del contrato. \\
+Calidad del trade ($Q$) & 15--20\% & Disciplina del plan escrito. \\
+\bottomrule
+\end{longtable}
+
+La función de recorte es:
+\begin{equation}
+\clp(x,0,100) = \min(100,\max(0,x)).
+\end{equation}
+
+\subsection{Pesos adaptativos al régimen}
+
+Los pesos $w$ se ajustan según el contexto (\texttt{getAdaptiveWeights}):
+
+\begin{longtable}{p{0.34\linewidth} cccc}
+\toprule
+\textbf{Régimen} & $w_M$ & $w_T$ & $w_O$ & $w_Q$ \\
+\midrule
+VIX elevado/spiking o SPY bajista & 0.30 & 0.20 & 0.35 & 0.15 \\
+SPY alcista & 0.25 & 0.30 & 0.25 & 0.20 \\
+Neutral (por defecto) & 0.35 & 0.25 & 0.25 & 0.15 \\
+\bottomrule
+\end{longtable}
+
+El puntaje base ponderado es:
+\begin{equation}
+S_{\text{base}} = w_M M + w_T T + w_O O + w_Q Q.
+\end{equation}
+
+\subsection{Puntaje de régimen de mercado}
+
+Parte de 50 y aplica ajustes discretos:
+\begin{align}
+M = \clp\big(&50
+ + 15\ind{\text{SPY alcista}} - 15\ind{\text{SPY bajista}} \notag\\
+&+ 15\ind{\text{QQQ alcista}} - 15\ind{\text{QQQ bajista}} \notag\\
+&+ 10\ind{\text{breadth fuerte}} - 10\ind{\text{breadth débil}} \notag\\
+&+ 5\ind{\text{VIX bajo}} - 10\ind{\text{VIX elevado}} - 25\ind{\text{VIX spiking}} \notag\\
+&+ 5\ind{\text{macro bajo}} - 20\ind{\text{macro alto}},\,0,100\big).
+\end{align}
+
+\subsection{Puntaje técnico}
+
+Cuando hay barras OHLCV disponibles, el técnico se calcula con indicadores reales
+(\texttt{lib/indicators.ts}) en lugar de etiquetas manuales:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{SMA}$_n$: media simple de los últimos $n$ cierres.
+  \item \textbf{EMA}$_n$: media exponencial con multiplicador $\alpha = 2/(n+1)$.
+  \item \textbf{RSI}$_{14}$: $\,RSI = 100 - \dfrac{100}{1+RS},\ RS = \dfrac{\overline{\text{ganancia}}}{\overline{\text{pérdida}}}$.
+  \item \textbf{ATR}$_{14}$: media del \emph{true range}
+        $\max(H-L,\,|H-C_{-1}|,\,|L-C_{-1}|)$.
+  \item \textbf{Volumen relativo}: volumen actual / promedio base.
+  \item \textbf{BWAP}: $\sum (p_{\text{típico}}\cdot V)/\sum V$, con
+        $p_{\text{típico}}=(H+L+C)/3$.
+\end{itemize}
+
+El puntaje técnico continuo pondera siete sub-calidades:
+trend ($25\%$), alineación de medias ($20\%$), RSI ($15\%$), volumen ($15\%$),
+BWAP ($10\%$), soporte/resistencia ($10\%$) y riesgo por ATR ($5\%$). Si no hay
+snapshot calculado, el sistema recurre a un modelo de respaldo con ajustes
+discretos sobre una base de 50.
+
+\subsection{Puntaje de calidad de opciones (continuo)}
+
+En \texttt{lib/risk/optionsQuality.ts}, cada dimensión usa una función suave en
+$[0,1]$ que luego se pondera a $[0,100]$:
+
+\begin{align}
+\text{spread}(s) &= \frac{1}{1+\left(\frac{s-2}{5}\right)^3}, \quad s>2\%, \\[1mm]
+\text{volumen}(v) &= \clp\!\left(\sqrt{v/500}\right), \\
+\text{OI}(oi) &= \clp\!\left(\sqrt{oi/1000}\right), \\
+\text{ivRank}(r) &= 1 - (r/100)^2, \\
+\text{theta}(\theta, m) &= 1 - \left|\theta/m\right|,
+\end{align}
+y la calidad de DTE tiene su máximo en $21$--$60$ días y cae a cero por debajo de
+5 o por encima de 240 días. Los pesos son: spread $30\%$, DTE $20\%$, volumen
+$15\%$, open interest $15\%$, IV rank $8\%$, tamaño de prima $7\%$ y theta $5\%$.
+
+\subsection{Puntaje de calidad del trade (continuo)}
+
+\begin{equation}
+Q = 100\big(0.25\,q_{\text{tesis}} + 0.10\,q_{\text{cat}} + 0.15\,q_{\text{inval}}
++ 0.15\,q_{\text{salida}} + 0.20\,q_{R} + 0.15\,q_{\text{chase}}\big),
+\end{equation}
+donde $q_{\text{tesis}} = \clp(\text{long}/80)$ (longitud del texto),
+$q_{\text{cat}} = 1$ si hay catalizador (si no, $0.35$),
+$q_{\text{inval}} = 1$ si existe nivel de invalidación,
+$q_{\text{salida}} = \clp(\text{long}/80)$,
+$q_R = \clp(R/3)$ con $R = \text{recompensa}/\text{pérdida máxima}$, y
+$q_{\text{chase}} = 0$ si la idea está marcada como \emph{chasing}.
+
+\subsection{Capas de superposición}
+
+Sobre $S_{\text{base}}$ se aplican ajustes aditivos:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Monte Carlo}: $+5$ si EV$>0$ y PoP$>55\%$; $-5$ si EV$<0$;
+        $-10$ si CVaR$_{95}\ge 0.85\cdot$ pérdida máxima.
+  \item \textbf{Sentimiento de Reddit} (si está activo): $+3$ si concuerda con la
+        dirección y la confianza $>0.65$; $-3$ si se opone; penalizaciones por
+        \emph{hype} o por preocupaciones severas.
+\end{itemize}
+
+\begin{equation}
+S_{\text{total}} = \clp\big(S_{\text{base}} + \Delta_{\text{MC}} + \Delta_{\text{Reddit}},\,0,100\big).
+\end{equation}
+
+% ==========================================================
+\section{Analítica de opciones}
+% ==========================================================
+
+El módulo \texttt{lib/options-math.ts} provee analítica probabilística.
+
+\subsection{Probabilidad de ganancia (PoP)}
+Bajo un modelo lognormal del subyacente, para un strike $K$, precio $S_0$,
+volatilidad implícita $\sigma$ y tiempo a vencimiento $\tau$ (en años):
+\begin{equation}
+d = \frac{\ln(K/S_0) + \tfrac{1}{2}\sigma^2\tau}{\sigma\sqrt{\tau}}, \qquad
+\text{PoP}_{\text{call}} = 1 - N(d), \quad \text{PoP}_{\text{put}} = N(d),
+\end{equation}
+donde $N(\cdot)$ es la CDF normal estándar (vía función de error). El punto de
+equilibrio es $K + \text{prima}$ (call) o $K - \text{prima}$ (put).
+
+\subsection{Valor esperado y Kelly}
+\begin{align}
+\text{EV} &= \text{PoP}\cdot\text{recompensa} - (1-\text{PoP})\cdot\text{pérdida máxima}, \\
+f^{*} &= \max\!\left(0,\ \frac{\text{PoP}\cdot b - (1-\text{PoP})}{b}\right),
+\end{align}
+con $b$ el cociente recompensa/riesgo. El sistema usa \textbf{Kelly fraccional al
+$25\%$} ($f_{1/4} = 0.25\,f^{*}$) como tope de tamaño.
+
+\subsection{VaR y CVaR (un día)}
+Usando una aproximación delta--gamma--vega más decaimiento por theta:
+\begin{align}
+\Delta S &= S_0 \cdot \frac{\sigma}{\sqrt{252}}, \\
+\sigma_{\text{proxy}} &= |\delta|\,\Delta S + \tfrac{1}{2}|\gamma|\,\Delta S^2 + |\nu|\,\sigma\cdot 0.1, \\
+\text{VaR}_{95} &= \sigma_{\text{proxy}}\,z_{95} + \theta_{\text{loss}}, \quad z_{95}=1.645, \\
+\text{CVaR}_{95} &= \sigma_{\text{proxy}}\cdot \frac{\phi(z_{95})}{0.05} + \theta_{\text{loss}}.
+\end{align}
+
+\subsection{Greeks en dólares y agregación}
+La exposición se escala por $100$ acciones por contrato. La función
+\texttt{aggregateOptionAnalytics} suma delta, gamma, theta y vega de todas las
+ideas aprobadas/entradas para mostrar los Greeks del portafolio.
+
+\subsection{Estructuras multi-leg (\texttt{lib/options/multileg.ts})}
+El payoff al vencimiento por pierna es $\max(S_T-K,0)$ (call) o $\max(K-S_T,0)$
+(put). El P\&L de una pierna long es $q\cdot 100\cdot(\text{payoff}-\text{prima})$
+y se invierte para piernas short. La calculadora evalúa el payoff en una malla de
+puntos (101 regulares más los strikes y el precio actual), localiza los puntos de
+equilibrio por interpolación lineal y deriva débito/crédito neto, pérdida y
+ganancia máximas, y Greeks netos. Existen plantillas para \emph{long call/put},
+\emph{bull call} y \emph{bear put debit spreads}, \emph{protective put} y
+\emph{collar}, y un detector de piernas short desnudas que actúa como hard stop.
+
+% ==========================================================
+\section{Simulación Monte Carlo}
+% ==========================================================
+
+En \texttt{lib/options/monteCarlo.ts} se simulan trayectorias del subyacente con
+un \emph{movimiento browniano geométrico} (GBM):
+\begin{equation}
+S_T = S_0 \exp\!\left[\left(\mu - q - \tfrac{1}{2}\sigma^2\right)\tau + \sigma\sqrt{\tau}\,Z\right],
+\quad Z\sim\mathcal{N}(0,1),
+\end{equation}
+con deriva $\mu$ (por defecto 0) y rendimiento por dividendos $q$. Para cada
+trayectoria se valúa la estructura multi-leg y se construye la distribución de
+P\&L, de la que se obtienen PoP, valor esperado, mediana, percentiles P5/P95,
+CVaR$_{95}$ y un histograma. El motor usa una semilla determinista (función del
+símbolo y el puntaje) para reproducibilidad, con miles de trayectorias por
+evaluación.
+
+% ==========================================================
+\section{Sentimiento de Reddit (opcional)}
+% ==========================================================
+
+El subsistema \texttt{lib/sentiment/reddit/} resume narrativa pública como señal
+cualitativa, siempre opcional y desactivada por defecto.
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Recolección}: busca en Reddit vía OAuth posts sobre el ticker y
+        sus catalizadores, ponderando subreddits (options $1.0$, investing/stocks
+        $0.9$, wallstreetbets $0.65$).
+  \item \textbf{Limpieza}: elimina URLs y menciones, decodifica HTML, colapsa
+        espacios y tokeniza.
+  \item \textbf{Embeddings TF--IDF locales}: sin modelos externos; se calcula
+        similitud por coseno $\cos(A,B)=\frac{A\cdot B}{\lVert A\rVert\,\lVert B\rVert}$.
+  \item \textbf{Recuperación}: puntaje $= 0.65\,\text{coseno} + 0.20\,\text{recencia} + 0.10\,\text{engagement} + 0.05\,\text{peso de subreddit}$.
+  \item \textbf{Clasificación}: produce etiquetas (\emph{strong\_bullish},
+        \emph{bullish}, \emph{mixed}, \emph{bearish}, \emph{strong\_bearish},
+        \emph{hype}, \emph{fear}, \emph{low\_signal}) a partir de puntajes de
+        sentimiento, hype y miedo, junto con argumentos, preocupaciones
+        recurrentes y catalizadores mencionados.
+\end{itemize}
+
+\noindent
+El sentimiento ajusta tanto el puntaje (capa de superposición) como un
+multiplicador de riesgo ($0.75\times$ ante hype alto o desacuerdo con alta
+confianza).
+
+% ==========================================================
+\section{Concentración sectorial}
+% ==========================================================
+
+En \texttt{lib/concentration.ts} se mide la concentración con el índice de
+Herfindahl--Hirschman:
+\begin{equation}
+\text{HHI} = \sum_k w_k^2, \qquad w_k = \frac{\text{riesgo}_k}{\text{riesgo total}},
+\end{equation}
+donde $k$ recorre sectores. El multiplicador de penalización es $0.5$ si
+$\text{HHI}>0.5$ (concentración alta), $0.75$ si $\text{HHI}>0.35$ (moderada) y
+$1.0$ en otro caso. Este multiplicador entra directamente en el dimensionamiento.
+
+% ==========================================================
+\section{Decisión y dimensionamiento de riesgo}
+% ==========================================================
+
+\subsection{Bandas de decisión}
+\begin{longtable}{p{0.30\linewidth} p{0.35\linewidth}}
+\toprule
+\textbf{Puntaje total} & \textbf{Decisión inicial} \\
+\midrule
+$S<60$ & reject \\
+$60\le S<75$ & watchlist \\
+$75\le S<85$ & approved\_small \\
+$S\ge 85$ & approved\_normal \\
+\bottomrule
+\end{longtable}
+
+\subsection{Hard stops (rechazo forzado)}
+Sin importar el puntaje, cualquiera de estos fuerza \emph{reject}:
+\begin{itemize}[noitemsep]
+  \item falta tesis escrita, nivel de invalidación, pérdida máxima o plan de salida;
+  \item spread bid/ask $>15\%$; DTE $<7$; prima $>1\%$ del portafolio;
+  \item volumen $<25$ y open interest $<100$ simultáneamente;
+  \item datos de pierna faltantes que impiden calcular la pérdida máxima;
+  \item estrategia de riesgo definido sin pérdida máxima determinable;
+  \item piernas short desnudas.
+\end{itemize}
+
+\subsection{Topes de aprobación (limitan a watchlist)}
+La idea no puede superar \emph{watchlist} si: está marcada como \emph{chasing},
+IV rank $>80$, IV del contrato $>85\%$, theta $>8\%$ del mid por día, o gamma alto
+con DTE $<30$.
+
+\subsection{Fórmula de dimensionamiento}
+
+El riesgo por multiplicadores es:
+\begin{equation}
+R_{\text{mult}} = B \cdot C(S)\cdot L(s)\cdot G\cdot V(r)\cdot K_{\text{conc}}\cdot K_{\text{MC}}\cdot K_{\text{sent}},
+\end{equation}
+con $B$ el riesgo base por trade (\MXN), y los multiplicadores:
+
+\begin{longtable}{p{0.30\linewidth} p{0.62\linewidth}}
+\toprule
+\textbf{Multiplicador} & \textbf{Regla} \\
+\midrule
+Confianza $C(S)$ & $0$ si $S<75$; $0.25$ ($75$--$80$); $0.50$ ($80$--$85$); $0.75$ ($85$--$90$); $1.0$ ($\ge 90$). \\
+Liquidez $L(s)$ & $0$ si spread $>15\%$; $0.25$ ($>10\%$); $0.50$ ($>5\%$); $1.0$ ($\le 5\%$). \\
+Régimen $G$ & $1.0$ si alineado; $0.50$ si neutral; $0.25$ si se opone (proxy: tendencia de SPY). \\
+Volatilidad $V(r)$ & $1.0$ si falta IV rank; $0.25$ ($>80$); $0.50$ ($60$--$80$); $0.75$ ($<20$). \\
+Concentración $K_{\text{conc}}$ & $1.0$ a $0.5$ según HHI. \\
+Monte Carlo $K_{\text{MC}}$ & $0.5$--$1.0$ según CVaR/EV/PoP. \\
+Sentimiento $K_{\text{sent}}$ & $0.75$ ante hype alto o desacuerdo confiado; $1.0$ en otro caso. \\
+\bottomrule
+\end{longtable}
+
+Luego se aplica el \textbf{tope de Kelly} y los topes del portafolio:
+\begin{align}
+R_{\text{uncapped}} &= \min\big(R_{\text{mult}},\ R_{\text{Kelly}}\big), \\
+\text{SuggestedRisk} &=
+\begin{cases}
+\min\!\big(R_{\text{uncapped}},\ \text{sleeve}_{\text{rest}},\ \text{mensual}_{\text{rest}},\ \text{abierto}_{\text{rest}}\big), & \text{si aprobada},\\
+0, & \text{en otro caso}.
+\end{cases}
+\end{align}
+
+\subsection{Límites por defecto (cuenta de 100{,}000 \MXN)}
+\begin{longtable}{p{0.50\linewidth} p{0.30\linewidth}}
+\toprule
+\textbf{Parámetro} & \textbf{Valor por defecto} \\
+\midrule
+Valor total del portafolio & 100{,}000 \MXN \\
+Sleeve de opciones ($3\%$) & 3{,}000 \MXN \\
+Riesgo base por trade ($0.5\%$) & 500 \MXN \\
+Pérdida mensual máxima ($1\%$) & 1000 \MXN \\
+Riesgo abierto máximo ($2\%$) & 2{,}000 \MXN \\
+\bottomrule
+\end{longtable}
+
+% ==========================================================
+\section{Descubrimiento e ideas automáticas}
+% ==========================================================
+
+\subsection{Descubrimiento (\texttt{lib/discovery.ts})}
+Combina varias fuentes (Yahoo \emph{day\_gainers/losers/most\_actives}, un
+universo líquido de mega-caps y menciones de Reddit) y puntúa cada candidato con
+componentes de configuración técnica, volatilidad realizada, fuerza relativa,
+ratio de volumen y señal social, aplicando una \textbf{penalización por
+extensión} cuando el movimiento intradía es grande (para no perseguir). Hay dos
+perfiles de pesos: \emph{quality} (configuraciones limpias) y \emph{movers}
+(reactivo a momentum y volumen).
+
+\subsection{Ideas automáticas (\texttt{lib/auto-ideas.ts})}
+\texttt{ensureDailyAutoIdeas} genera hasta cierto número de ideas por día:
+descubre candidatos, arma el contexto de mercado, selecciona el mejor contrato de
+opción vía Alpaca (\texttt{lib/option-selector.ts}), construye el
+\texttt{TradeInput}, lo puntúa y lo guarda como \emph{watchlist} o \emph{reject}
+(nunca aprobada automáticamente, conservando la aprobación manual).
+
+\subsection{Selección de contrato (\texttt{lib/option-selector.ts})}
+Puntúa cada contrato de la cadena con una rúbrica: ajuste de delta ($22\%$,
+objetivo $0.40$), calidad de spread ($20\%$), liquidez ($18\%$, volumen + OI),
+ajuste de DTE ($14\%$, máximo en $\sim 42$ días), IV ($10\%$), theta ($8\%$),
+gamma ($4\%$) y \emph{moneyness} ($4\%$), con un umbral mínimo de $48/100$.
+
+\subsection{Refresco diario (\texttt{lib/daily-refresh.ts})}
+Orquesta la actualización: refresca cotizaciones de la watchlist, obtiene el
+historial de SPY/QQQ/VIX, reconstruye el contexto de mercado, actualiza
+técnicos y snapshots de Alpaca por idea, re-puntúa y guarda un
+\texttt{TradeScoreSnapshot} para seguir la evolución diaria.
+
+% ==========================================================
+\section{Métricas de la bitácora}
+% ==========================================================
+
+En \texttt{lib/calculations.ts} se calculan, para operaciones cerradas:
+
+\begin{align}
+\text{WinRate} &= \frac{\#\text{ganadoras}}{\#\text{cerradas}}\times 100, \\
+\text{Expectancy} &= \tfrac{\text{WinRate}}{100}\,\overline{\text{ganancia}} + \tfrac{\text{LossRate}}{100}\,\overline{\text{pérdida}}, \\
+\text{Sharpe}_{\text{proxy}} &= \frac{\overline{P\&L}}{\sigma_{P\&L}}\sqrt{\frac{252}{\overline{\text{duración}}}}, \\
+\text{Sortino}_{\text{proxy}} &= \frac{\overline{P\&L}}{\sigma_{\text{downside}}}\sqrt{\frac{252}{\overline{\text{duración}}}}.
+\end{align}
+
+Además calcula intervalos de confianza al $95\%$ por \emph{bootstrap} (generador
+congruencial lineal con semilla determinista) y un \emph{backtest por bandas de
+puntaje} ($<60$, $60$--$74$, $75$--$84$, $\ge 85$) para comparar el P\&L por
+banda y validar si el modelo discrimina.
+
+% ==========================================================
+\section{Bot de investigación en Python}
+% ==========================================================
+
+\texttt{options-strategy-bot/} es un banco de pruebas independiente que
+\textbf{no opera en vivo}. Replica la lógica de \RiskGate{} para escanear,
+puntuar, hacer \emph{backtest} y llevar un libro de \emph{paper trading}.
+
+\begin{longtable}{p{0.26\linewidth} p{0.66\linewidth}}
+\toprule
+\textbf{Módulo} & \textbf{Función} \\
+\midrule
+\texttt{config.py} & Esquema de configuración (riesgo, estrategia, costos, universo). \\
+\texttt{data.py} & Carga de datos: CSV, Yahoo o barras sintéticas; modo \emph{offline}. \\
+\texttt{features.py} & Indicadores (SMA, RSI, volatilidad realizada) y régimen de mercado. \\
+\texttt{options.py} & Black--Scholes propio (precio y Greeks), proxy de IV y construcción de spreads de débito. \\
+\texttt{model.py} & Puntaje de cuatro módulos, decisión y dimensionamiento estilo \RiskGate{}. \\
+\texttt{strategies.py} & Genera candidatos por estrategia habilitada y los ordena por puntaje. \\
+\texttt{backtest.py} & Backtest histórico con entradas/salidas, curva de equity y resumen (expectancy, win rate). \\
+\texttt{paper.py} & Libro de paper trading en JSON. \\
+\texttt{providers/alpaca.py} & Snapshot de cadena de opciones (solo lectura). \\
+\texttt{cli.py} & Comandos \texttt{scan}, \texttt{backtest}, \texttt{paper-step}. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Black--Scholes y proxy de IV}
+El bot valúa opciones con la forma cerrada de Black--Scholes (precio, delta,
+gamma, theta, vega) y aproxima la IV a partir de la volatilidad realizada a 20
+días ($\sigma_{\text{impl}}\approx 1.15\,\sigma_{\text{real}}$, acotada a
+$[0.18, 0.85]$). Esto le permite simular el valor de estructuras sin acceso a
+cadenas históricas reales.
+
+\subsection{Scripts de validación}
+\begin{itemize}[noitemsep]
+  \item \texttt{backtest\_riskgate\_premiums.py}: lee contratos guardados en la
+        base de \RiskGate{} y traza cómo se movió la prima real (Alpaca) tras la
+        entrada.
+  \item \texttt{compare\_scored\_ideas.py}: compara la precisión direccional y por
+        bandas de puntaje de las ideas guardadas.
+  \item \texttt{chart\_yahoo\_signal\_followthrough.py}: grafica el movimiento del
+        subyacente tras una señal usando cierres ajustados de Yahoo.
+\end{itemize}
+
+% ==========================================================
+\section{Limitaciones actuales}
+% ==========================================================
+
+\begin{itemize}[noitemsep]
+  \item El régimen de mercado todavía puede depender de selección manual y usa la
+        tendencia de SPY como \emph{proxy} de régimen para el multiplicador.
+  \item La probabilidad de ganancia y el tope de Kelly dependen de IV y datos de
+        contrato; cuando faltan, se usan \emph{proxies} (probabilidad implícita
+        por puntaje).
+  \item Yahoo Finance es una fuente pública no oficial; puede fallar, retrasarse o
+        cambiar de formato.
+  \item No hay detección automática de fechas de reportes (earnings) ni de eventos
+        macro programados.
+  \item El sentimiento de Reddit usa TF--IDF local, no un modelo de lenguaje, por
+        lo que capta coincidencia de términos más que matices.
+  \item El backtest no modela el deslizamiento real de ejecución ni el llenado
+        parcial de spreads ilíquidos con fidelidad de mercado.
+  \item No hay autenticación multiusuario ni cifrado de la base local.
+\end{itemize}
+
+% ==========================================================
+\section{Recomendaciones y próximos pasos}
+% ==========================================================
+
+Esta sección reúne las mejoras propuestas, organizadas por horizonte de
+implementación. Se incluye explícitamente la mejora de los \emph{proxies} que el
+modelo usa hoy.
+
+\subsection{Corto plazo: robustez de datos y \emph{proxies}}
+
+\paragraph{Reemplazar el proxy de régimen de SPY.}
+Hoy el multiplicador de régimen $G$ usa únicamente la tendencia de SPY como
+proxy. Se recomienda construir un \emph{régimen compuesto} que combine SPY, QQQ,
+breadth y VIX en un solo índice $\in[-1,1]$ y derivar $G$ de él, de modo que un
+mercado con SPY plano pero breadth débil y VIX en alza no reciba $G=0.5$.
+
+\paragraph{Sustituir la probabilidad implícita por puntaje en Kelly.}
+Cuando faltan IV o datos del contrato, el tope de Kelly usa una probabilidad
+derivada del puntaje ($p=S/100$). Conviene migrar a una PoP calculada siempre
+desde la cadena real (delta como proxy de probabilidad o PoP lognormal completa),
+y registrar en la idea si la PoP fue \emph{medida} o \emph{estimada}.
+
+\paragraph{Mejorar el proxy de IV del bot.}
+El factor fijo $1.15\times\sigma_{\text{real}}$ podría calibrarse por subyacente
+y por régimen (term structure y \emph{skew} simplificados), o sustituirse por IV
+real cuando exista snapshot de Alpaca.
+
+\paragraph{Endurecer la fuente de datos.}
+Añadir reintentos, validación de esquema y \emph{fallback} entre proveedores
+(Yahoo $\rightarrow$ Alpaca $\rightarrow$ manual) con marcas de frescura visibles
+en la interfaz, y registrar cuándo un dato es estimado.
+
+\subsection{Mediano plazo: cobertura del modelo}
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Calendario de earnings y eventos macro}: marcar ideas cuyo
+        vencimiento cruce un reporte o un evento (FOMC, CPI) y aplicar un tope o
+        advertencia automática.
+  \item \textbf{Checks por estrategia}: validaciones específicas para
+        \emph{long calls/puts}, \emph{debit spreads}, \emph{protective puts} y
+        \emph{collars} (ancho, break-even, reward/risk, cobertura).
+  \item \textbf{Correlación entre ideas}: extender la concentración por sector a
+        una matriz de correlación entre subyacentes para evitar riesgo redundante.
+  \item \textbf{Calibración del modelo con la bitácora}: usar el backtest por
+        bandas de puntaje para re-ajustar pesos y umbrales (validación walk-forward).
+  \item \textbf{Sentimiento con embeddings semánticos}: reemplazar TF--IDF por
+        \emph{embeddings} de un modelo de lenguaje local para captar matices y
+        sarcasmo, manteniendo el procesamiento en la máquina.
+\end{itemize}
+
+\subsection{Largo plazo: producto y plataforma}
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Empaquetado de escritorio}: envolver la app con Tauri para generar
+        un ejecutable de Windows ligero, manteniendo la primera versión de
+        escritorio en modo solo lectura y sin credenciales del broker.
+  \item \textbf{Cifrado de la base local} y bloqueo por contraseña local.
+  \item \textbf{Auditoría}: bitácora inmutable de decisiones del modelo para
+        revisar por qué se aprobó o rechazó cada idea.
+  \item \textbf{Integración de datos profesional}: migrar de Yahoo a un proveedor
+        formal de cadenas y Greeks.
+\end{itemize}
+
+\subsection{Candidatos de integración externa}
+
+\begin{longtable}{p{0.20\linewidth} p{0.58\linewidth}}
+\toprule
+\textbf{Proveedor} & \textbf{Uso recomendado} \\
+\midrule
+Tradier & Cadenas de opciones con Greeks/IV, datos de cuenta y sandbox; ruta hacia paper/live. \\
+Polygon.io & Datos de mercado de opciones de EE.\,UU.\ (tiempo real e histórico). \\
+MarketData.app & Vencimientos, strikes, cadenas y cotizaciones para prellenado. \\
+Alpaca & Cadena de opciones ya integrada; paper trading futuro con confirmación explícita. \\
+\bottomrule
+\end{longtable}
+
+\begin{itemize}[noitemsep]
+  \item Tradier: \url{https://docs.tradier.com/reference/brokerage-api-markets-get-options-chains}
+  \item Polygon.io: \url{https://polygon.io/docs/rest/options/overview}
+  \item MarketData.app: \url{https://www.marketdata.app/docs/api/}
+  \item Alpaca: \url{https://docs.alpaca.markets/docs/options-trading}
+\end{itemize}
+
+\noindent
+La ruta recomendada es siempre \textbf{datos de solo lectura primero}. Cualquier
+automatización de órdenes debe quedar fuera de alcance hasta que existan manejo
+confiable de datos, pruebas, auditoría y flujos de confirmación explícita.
+
+% ==========================================================
+\section{Cómo ejecutar}
+% ==========================================================
+
+\subsection{Aplicación web}
+\begin{lstlisting}
+npm install
+npm run prisma:generate
+npm run db:init
+npm run seed
+npm run dev
+\end{lstlisting}
+Abrir \texttt{http://127.0.0.1:3000}. Para datos de opciones, configurar
+\texttt{APCA\_API\_KEY\_ID} y \texttt{APCA\_API\_SECRET\_KEY} en \texttt{.env}.
+
+\subsection{Bot de investigación}
+\begin{lstlisting}
+cd options-strategy-bot
+pip install -r requirements.txt
+python -m bot.cli scan --synthetic --offline
+python -m bot.cli backtest --synthetic
+\end{lstlisting}
+
+% ==========================================================
+\section{Notas de seguridad}
+% ==========================================================
+
+\begin{itemize}[noitemsep]
+  \item Las opciones son riesgosas y pueden expirar sin valor.
+  \item \RiskGate{} es una herramienta de apoyo a la decisión, no asesoría
+        financiera.
+  \item La aplicación no debe almacenar contraseñas del broker.
+  \item Las integraciones de solo lectura deben preceder a cualquier flujo de
+        colocación de órdenes.
+  \item El modelo es cuantitativo y basado en reglas, no un sistema predictivo
+        garantizado.
+\end{itemize}
+
+% ==========================================================
+\section{Conclusión}
+% ==========================================================
+
+\RiskGate{} reúne los componentes de una disciplina de opciones rigurosa:
+aislamiento por portafolio, posiciones manuales e importadas, watchlist,
+descubrimiento de candidatos, una compuerta formal de ideas con puntaje
+ponderado adaptativo, calidad de opciones continua, analítica probabilística
+(PoP, EV, Kelly, VaR/CVaR), simulación Monte Carlo, sentimiento opcional de
+Reddit, control de concentración, dimensionamiento acotado por la cuenta y una
+bitácora con métricas de validación. El bot de Python complementa la app como
+banco de pruebas de \emph{backtesting}. La evolución más valiosa es continuar
+\textbf{automatizando inputs objetivos y mejorando los proxies del modelo}
+mientras se conserva la aprobación manual y el principio local-first.
+
+\end{document}

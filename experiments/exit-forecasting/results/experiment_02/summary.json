@@ -1,0 +1,222 @@
+{
+  "seed": 1729,
+  "train_end": "2018-12-31",
+  "validation": [
+    "2019-01-01",
+    "2019-12-31"
+  ],
+  "test_start": "2020-01-01",
+  "quantile_threshold": -0.2,
+  "transaction_cost_bps": 5.0,
+  "forecast_metrics": {
+    "pinball_q10": 0.004386269541739309,
+    "pinball_q50": 0.008214429408364305,
+    "interval_80_coverage": 0.653012781497261,
+    "median_direction_accuracy": 0.5043822276323798
+  },
+  "bootstrap_sharpe_difference_90ci": {
+    "GARCH gradual": [
+      -0.4495069080933988,
+      -0.08523059820278549,
+      0.345969084939458
+    ],
+    "Quantile LGBM": [
+      -0.23557913958607107,
+      -0.11223618373816557,
+      -0.013751977516799692
+    ],
+    "Hybrid": [
+      -0.5826115589687569,
+      -0.1804101782943913,
+      0.2888740856374159
+    ]
+  },
+  "metrics": [
+    {
+      "strategy": "Buy & hold",
+      "annual_return": 0.26038801794965916,
+      "annual_volatility": 0.28497112462307195,
+      "sharpe": 0.9137347452099627,
+      "max_drawdown": -0.4539596090224983,
+      "final_wealth": 4.5213888630269805,
+      "exposure": 1.0,
+      "changes": 0
+    },
+    {
+      "strategy": "GARCH gradual",
+      "annual_return": 0.1866047407740008,
+      "annual_volatility": 0.2157460135479348,
+      "sharpe": 0.8649278737775642,
+      "max_drawdown": -0.4638291747614999,
+      "final_wealth": 3.0511519837561414,
+      "exposure": 0.8452221545952526,
+      "changes": 229
+    },
+    {
+      "strategy": "Quantile LGBM",
+      "annual_return": 0.22258530718996372,
+      "annual_volatility": 0.2776502706580326,
+      "sharpe": 0.8016750953004129,
+      "max_drawdown": -0.4682455847718471,
+      "final_wealth": 3.70720283862003,
+      "exposure": 0.9639379184418746,
+      "changes": 1108
+    },
+    {
+      "strategy": "Hybrid",
+      "annual_return": 0.1633615468661569,
+      "annual_volatility": 0.21026630005588398,
+      "sharpe": 0.7769269104118878,
+      "max_drawdown": -0.46848120825477,
+      "final_wealth": 2.681942386716739,
+      "exposure": 0.8214850882531953,
+      "changes": 1004
+    }
+  ],
+  "metrics_by_block": [
+    {
+      "strategy": "Buy & hold",
+      "block": "2020-2021",
+      "annual_return": 0.5745426724734439,
+      "annual_volatility": 0.31718439410764915,
+      "sharpe": 1.811383798026488,
+      "max_drawdown": -0.32877617038500584,
+      "final_wealth": 2.483654774467658
+    },
+    {
+      "strategy": "Buy & hold",
+      "block": "2022",
+      "annual_return": -0.4405797859260554,
+      "annual_volatility": 0.3760107888218505,
+      "sharpe": -1.1717211288179206,
+      "max_drawdown": -0.44220501697796244,
+      "final_wealth": 0.5607111523753988
+    },
+    {
+      "strategy": "Buy & hold",
+      "block": "2023-2024",
+      "annual_return": 0.6066902075099982,
+      "annual_volatility": 0.2139259441762758,
+      "sharpe": 2.8359823762660743,
+      "max_drawdown": -0.14784665194389657,
+      "final_wealth": 2.5717568861284366
+    },
+    {
+      "strategy": "Buy & hold",
+      "block": "2025-2026",
+      "annual_return": 0.1647897599362842,
+      "annual_volatility": 0.24728612881105513,
+      "sharpe": 0.6663930594432805,
+      "max_drawdown": -0.266799145929529,
+      "final_wealth": 1.2624422642378903
+    },
+    {
+      "strategy": "GARCH gradual",
+      "block": "2020-2021",
+      "annual_return": 0.4840889073922314,
+      "annual_volatility": 0.21650705956342386,
+      "sharpe": 2.2359035699268817,
+      "max_drawdown": -0.14453961039228014,
+      "final_wealth": 2.2059732131476966
+    },
+    {
+      "strategy": "GARCH gradual",
+      "block": "2022",
+      "annual_return": -0.45131536777643244,
+      "annual_volatility": 0.29532732398855743,
+      "sharpe": -1.5281869678740556,
+      "max_drawdown": -0.45286734060159617,
+      "final_wealth": 0.5499930857954222
+    },
+    {
+      "strategy": "GARCH gradual",
+      "block": "2023-2024",
+      "annual_return": 0.4779747901324798,
+      "annual_volatility": 0.19806522753203923,
+      "sharpe": 2.4132191000318928,
+      "max_drawdown": -0.15411133177108183,
+      "final_wealth": 2.177647038525785
+    },
+    {
+      "strategy": "GARCH gradual",
+      "block": "2025-2026",
+      "annual_return": 0.09880709215043737,
+      "annual_volatility": 0.1657314179129139,
+      "sharpe": 0.5961880577305931,
+      "max_drawdown": -0.1695088715191425,
+      "final_wealth": 1.154832208294236
+    },
+    {
+      "strategy": "Quantile LGBM",
+      "block": "2020-2021",
+      "annual_return": 0.4636158951059268,
+      "annual_volatility": 0.3081601085921867,
+      "sharpe": 1.5044643423314321,
+      "max_drawdown": -0.3206112936627209,
+      "final_wealth": 2.14541193116678
+    },
+    {
+      "strategy": "Quantile LGBM",
+      "block": "2022",
+      "annual_return": -0.45507708768968047,
+      "annual_volatility": 0.3567738750800371,
+      "sharpe": -1.2755336628490257,
+      "max_drawdown": -0.45666421293393,
+      "final_wealth": 0.5462373071231948
+    },
+    {
+      "strategy": "Quantile LGBM",
+      "block": "2023-2024",
+      "annual_return": 0.599413348427992,
+      "annual_volatility": 0.21375986834284996,
+      "sharpe": 2.804143514284877,
+      "max_drawdown": -0.14766665126597156,
+      "final_wealth": 2.548605973257604
+    },
+    {
+      "strategy": "Quantile LGBM",
+      "block": "2025-2026",
+      "annual_return": 0.15194074470551877,
+      "annual_volatility": 0.24548707929845678,
+      "sharpe": 0.6189358117735931,
+      "max_drawdown": -0.2627707285057397,
+      "final_wealth": 1.2412281098492157
+    },
+    {
+      "strategy": "Hybrid",
+      "block": "2020-2021",
+      "annual_return": 0.4161656634444222,
+      "annual_volatility": 0.2099227190569145,
+      "sharpe": 1.9824708126593522,
+      "max_drawdown": -0.13728719297894731,
+      "final_wealth": 2.008296259574882
+    },
+    {
+      "strategy": "Hybrid",
+      "block": "2022",
+      "annual_return": -0.4559038691883751,
+      "annual_volatility": 0.2796561371496565,
+      "sharpe": -1.6302301599210054,
+      "max_drawdown": -0.4574853175249024,
+      "final_wealth": 0.5454118176720745
+    },
+    {
+      "strategy": "Hybrid",
+      "block": "2023-2024",
+      "annual_return": 0.4726649572430721,
+      "annual_volatility": 0.19795204131313984,
+      "sharpe": 2.3877751101104563,
+      "max_drawdown": -0.1539326543838745,
+      "final_wealth": 2.1620898951628993
+    },
+    {
+      "strategy": "Hybrid",
+      "block": "2025-2026",
+      "annual_return": 0.08482766979910394,
+      "annual_volatility": 0.1648187739759811,
+      "sharpe": 0.5146723747105764,
+      "max_drawdown": -0.170061626330125,
+      "final_wealth": 1.132461311219573
+    }
+  ]
+}

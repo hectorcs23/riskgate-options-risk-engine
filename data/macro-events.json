@@ -1,0 +1,34 @@
+[
+  {
+    "type": "cpi",
+    "title": "CPI Inflation Report",
+    "date": "2026-06-10",
+    "source": "static_calendar",
+    "confidence": "medium",
+    "description": "Static local macro calendar entry."
+  },
+  {
+    "type": "fomc",
+    "title": "FOMC Rate Decision",
+    "date": "2026-06-17",
+    "source": "static_calendar",
+    "confidence": "medium",
+    "description": "Static local macro calendar entry."
+  },
+  {
+    "type": "pce",
+    "title": "PCE Inflation Report",
+    "date": "2026-06-26",
+    "source": "static_calendar",
+    "confidence": "medium",
+    "description": "Static local macro calendar entry."
+  },
+  {
+    "type": "nfp",
+    "title": "Nonfarm Payrolls",
+    "date": "2026-07-02",
+    "source": "static_calendar",
+    "confidence": "medium",
+    "description": "Static local macro calendar entry."
+  }
+]

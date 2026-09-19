@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #f5f7ef;
+  color: #17201c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    linear-gradient(180deg, rgba(232, 238, 226, 0.86), rgba(245, 247, 239, 1) 360px),
+    #f5f7ef;
+  color: #17201c;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-stone-200 bg-white shadow-soft;
+  }
+
+  .panel-pad {
+    @apply rounded-lg border border-stone-200 bg-white p-5 shadow-soft;
+  }
+
+  .field-label {
+    @apply text-xs font-semibold uppercase tracking-wide text-stone-500;
+  }
+
+  .field-input {
+    @apply mt-1 w-full rounded-md border-stone-300 bg-white text-sm text-ink shadow-sm focus:border-moss focus:ring-moss;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md bg-ink px-3 py-2 text-sm font-semibold text-white transition hover:bg-moss;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-ink transition hover:bg-mist;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 transition hover:bg-red-100;
+  }
+
+  .table-head {
+    @apply border-b border-stone-200 bg-stone-50 text-left text-xs font-semibold uppercase tracking-wide text-stone-500;
+  }
+
+  .table-cell {
+    @apply border-b border-stone-100 px-4 py-3 text-sm;
+  }
+}

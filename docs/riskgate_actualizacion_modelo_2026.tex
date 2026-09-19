@@ -1,0 +1,583 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ==========================================================
+%  RiskGate - Actualizacion del modelo de riesgo 2026
+% ==========================================================
+
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue,
+  pdftitle={RiskGate - Actualizacion del modelo de riesgo 2026},
+  pdfauthor={RiskGate}
+}
+
+\definecolor{rgcode}{gray}{0.96}
+\lstdefinestyle{riskgate}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  backgroundcolor=\color{rgcode},
+  keepspaces=true,
+  showstringspaces=false
+}
+\lstset{style=riskgate}
+
+\newcommand{\RiskGate}{\textsc{RiskGate}}
+\newcommand{\MXN}{\ensuremath{\mathrm{MXN}}}
+\newcommand{\clp}{\operatorname{clamp}}
+\setlist[itemize]{leftmargin=1.3em}
+\setlist[enumerate]{leftmargin=1.5em}
+
+\title{\textbf{\RiskGate}\\[2mm]
+\large Actualizaci\'on del modelo de riesgo, probabilidad y sentimiento}
+\author{Proyecto \RiskGate{} --- aplicaci\'on local-first}
+\date{Mayo de 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent
+Este documento resume las modificaciones recientes incorporadas a \RiskGate{}:
+r\'egimen de mercado compuesto, jerarqu\'ia de probabilidad de ganancia basada en
+opciones, dimensionamiento Kelly sin usar el puntaje como probabilidad, capa de
+riesgo por eventos, validaciones espec\'ificas por estrategia y reemplazo del
+sentimiento de Reddit por sentimiento de noticias de Yahoo Finance. La
+aplicaci\'on permanece local-first, de solo lectura frente a fuentes externas,
+sin credenciales de broker, sin colocaci\'on de \'ordenes y sin automatizaci\'on de
+trading.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ==========================================================
+\section{Resumen ejecutivo}
+% ==========================================================
+
+La actualizaci\'on corrige cinco debilidades del modelo anterior:
+
+\begin{enumerate}[noitemsep]
+  \item El multiplicador de r\'egimen ya no depende solo de SPY.
+  \item La probabilidad de ganancia (PoP) ya no se infiere como
+        \texttt{score / 100}.
+  \item El tama\~no por Kelly usa una PoP derivada de opciones o se desactiva.
+  \item Los eventos de earnings y calendario macro pueden advertir, reducir
+        tama\~no, limitar la decisi\'on o rechazar estructuras severas.
+  \item El sentimiento opcional ahora se basa en noticias de Yahoo Finance,
+        no en Reddit.
+\end{enumerate}
+
+El flujo final del motor de riesgo queda organizado as\'i:
+
+\begin{lstlisting}
+1. Validar campos obligatorios.
+2. Construir regimen de mercado compuesto.
+3. Calcular puntajes base: mercado, tecnico, opciones y plan.
+4. Aplicar pesos adaptativos.
+5. Ejecutar analitica de opciones y Monte Carlo cuando haya datos.
+6. Estimar PoP con jerarquia de fuentes.
+7. Calcular Kelly desde PoP.
+8. Evaluar riesgo por eventos.
+9. Evaluar checks especificos de estrategia.
+10. Aplicar overlay de Yahoo Finance Sentiment si esta activo.
+11. Convertir score a decision.
+12. Aplicar hard stops y caps.
+13. Calcular riesgo sugerido con todos los multiplicadores.
+\end{lstlisting}
+
+% ==========================================================
+\section{Nuevos m\'odulos}
+% ==========================================================
+
+\begin{longtable}{p{0.33\linewidth} p{0.57\linewidth}}
+\toprule
+\textbf{Archivo} & \textbf{Responsabilidad} \\
+\midrule
+\texttt{lib/risk/market-regime.ts} & Calcula el r\'egimen compuesto con SPY,
+QQQ, amplitud de mercado y VIX. \\
+\texttt{lib/options/pop.ts} & Estima PoP con jerarqu\'ia de fuentes y calcula
+Kelly fraccional desde PoP. \\
+\texttt{lib/risk/event-risk.ts} & Eval\'ua cruces de earnings y eventos macro,
+produce advertencias, caps, hard stops y multiplicador de riesgo. \\
+\texttt{lib/risk/strategy-checks.ts} & Valida reglas propias de long call, long
+put, debit spreads, protective put y collar. \\
+\texttt{lib/sentiment/yahoo/} & Recolecta, limpia, clasifica y aplica overlay
+de sentimiento de noticias de Yahoo Finance. \\
+\texttt{data/macro-events.json} & Calendario macro local editable. \\
+\texttt{scripts/migrate-yahoo-sentiment-and-risk-overlays.mjs} & Migraci\'on
+SQLite local para settings nuevos y cach\'e de documentos Yahoo. \\
+\bottomrule
+\end{longtable}
+
+% ==========================================================
+\section{R\'egimen de mercado compuesto}
+% ==========================================================
+
+Antes, el multiplicador de r\'egimen usaba principalmente la tendencia de SPY.
+Ahora se calcula un \'indice compuesto normalizado:
+
+\[
+C \in [-1,1].
+\]
+
+El r\'egimen combina cuatro componentes:
+
+\begin{longtable}{p{0.22\linewidth} p{0.18\linewidth} p{0.48\linewidth}}
+\toprule
+\textbf{Componente} & \textbf{Peso} & \textbf{Idea} \\
+\midrule
+SPY & 30\% & Tendencia del mercado amplio. \\
+QQQ & 25\% & Tendencia de crecimiento/Nasdaq. \\
+Breadth & 25\% & Proporci\'on de universo/watchlist arriba de SMA50. \\
+VIX & 20\% & Volatilidad impl\'icita de mercado, invertida. \\
+\bottomrule
+\end{longtable}
+
+Si falta un componente, el modelo normaliza los pesos disponibles:
+
+\[
+C = \frac{\sum_i s_i w_i}{\sum_i w_i\ \text{disponible}}.
+\]
+
+La confianza es el peso total disponible:
+
+\[
+\text{confianza} = \sum_i w_i\ \text{disponible}.
+\]
+
+\subsection{Etiquetas}
+
+\begin{longtable}{p{0.35\linewidth} p{0.45\linewidth}}
+\toprule
+\textbf{Rango} & \textbf{Etiqueta} \\
+\midrule
+$C \ge 0.60$ & \texttt{strong\_bullish} \\
+$0.25 \le C < 0.60$ & \texttt{bullish} \\
+$-0.25 < C < 0.25$ & \texttt{neutral} \\
+$-0.60 < C \le -0.25$ & \texttt{bearish} \\
+$-0.80 < C \le -0.60$ & \texttt{strong\_bearish} \\
+$C \le -0.80$ & \texttt{stress} \\
+\bottomrule
+\end{longtable}
+
+Un VIX mayor o igual a 35, o un salto diario igual o mayor a 15\%, puede forzar
+\texttt{stress}.
+
+\subsection{Multiplicador de r\'egimen}
+
+El multiplicador $G$ ahora depende de la etiqueta compuesta y de la direcci\'on
+del trade.
+
+\begin{longtable}{p{0.24\linewidth} p{0.20\linewidth} p{0.20\linewidth} p{0.20\linewidth}}
+\toprule
+\textbf{R\'egimen} & \textbf{Bullish} & \textbf{Bearish} & \textbf{Neutral/Hedge} \\
+\midrule
+\texttt{strong\_bullish} & 1.00 & 0.25 & 0.75 \\
+\texttt{bullish} & 0.85 & 0.35 & 0.85 \\
+\texttt{neutral} & 0.50 & 0.50 & 1.00 \\
+\texttt{bearish} & 0.35 & 0.85 & 0.85 \\
+\texttt{strong\_bearish} & 0.25 & 1.00 & 0.75 \\
+\texttt{stress} & 0.15 & 0.75 & 0.50 \\
+\bottomrule
+\end{longtable}
+
+Si la confianza es menor a 50\%, $G$ se limita a 0.50 y se muestra una
+advertencia de baja confianza.
+
+% ==========================================================
+\section{PoP y Kelly}
+% ==========================================================
+
+El cambio m\'as importante de probabilidad es que el puntaje del modelo ya no es
+tratado como probabilidad. Se elimin\'o la l\'ogica activa equivalente a:
+
+\begin{lstlisting}
+p = totalScore / 100
+\end{lstlisting}
+
+La nueva jerarqu\'ia de fuentes es:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Monte Carlo}: prioridad para estructuras multi-leg con simulaci\'on
+        v\'alida.
+  \item \textbf{Lognormal con IV real}: usa spot, strike, DTE e IV.
+  \item \textbf{Proxy por delta}: usa delta absoluta o delta neta aproximada.
+  \item \textbf{Proxy por IV}: solo si falta IV real pero existe proxy calibrado.
+  \item \textbf{No disponible}: PoP nula y Kelly desactivado.
+\end{enumerate}
+
+El resultado incluye:
+
+\begin{lstlisting}
+{
+  pop: number | null,
+  source: "monte_carlo" | "lognormal_iv" | "delta_proxy" |
+          "iv_proxy" | "unavailable",
+  confidence: "high" | "medium" | "low",
+  warnings: string[],
+  inputsUsed: { iv, delta, dte, spot, strike, monteCarloPaths }
+}
+\end{lstlisting}
+
+\subsection{Kelly desde PoP}
+
+Con $p$ como PoP y $b$ como recompensa/riesgo:
+
+\[
+f^* = \max\left(0,\frac{p b - (1-p)}{b}\right).
+\]
+
+\RiskGate{} usa Kelly fraccional al 25\%:
+
+\[
+f_{\text{RG}} = 0.25 f^*.
+\]
+
+El tope de riesgo por Kelly es:
+
+\[
+R_{\text{Kelly}} = V_{\text{portafolio}} f_{\text{RG}}.
+\]
+
+Si PoP no est\'a disponible:
+
+\begin{itemize}[noitemsep]
+  \item Kelly se desactiva.
+  \item El riesgo sugerido se vuelve cero.
+  \item La decisi\'on queda limitada como m\'aximo a \texttt{watchlist}.
+  \item Se muestra la advertencia correspondiente.
+\end{itemize}
+
+Si PoP tiene confianza baja, la decisi\'on se limita como m\'aximo a
+\texttt{approved\_small}.
+
+% ==========================================================
+\section{Riesgo por eventos}
+% ==========================================================
+
+El nuevo overlay de eventos no reemplaza el puntaje base. Act\'ua despu\'es del
+puntaje y antes del dimensionamiento final. Puede:
+
+\begin{itemize}[noitemsep]
+  \item agregar advertencias;
+  \item reducir el multiplicador de riesgo;
+  \item limitar la decisi\'on a \texttt{watchlist} o \texttt{approved\_small};
+  \item forzar \texttt{reject} ante hard stops.
+\end{itemize}
+
+El archivo \texttt{data/macro-events.json} contiene eventos macro locales como
+CPI, FOMC, PCE y NFP. El calendario es editable y no se hardcodean fechas futuras
+en TypeScript.
+
+\subsection{Reglas principales}
+
+\begin{itemize}[noitemsep]
+  \item Si el vencimiento cruza earnings, se advierte sobre gap risk e IV crush.
+  \item Un debit spread que cruza earnings puede quedar limitado a
+        \texttt{approved\_small}.
+  \item Exposici\'on naked short cruzando earnings genera hard stop.
+  \item Eventos macro cercanos reducen el multiplicador a 0.75 o 0.50.
+  \item Evento macro en r\'egimen \texttt{stress} limita la decisi\'on a
+        \texttt{watchlist}.
+\end{itemize}
+
+El resultado del m\'odulo tiene esta forma conceptual:
+
+\begin{lstlisting}
+{
+  eventRiskLevel: "none" | "low" | "medium" | "high",
+  crossesEarnings: boolean,
+  crossesMacroEvent: boolean,
+  events: RiskEvent[],
+  eventWarnings: string[],
+  hardStops: string[],
+  decisionCap?: "watchlist" | "approved_small",
+  riskMultiplier: number
+}
+\end{lstlisting}
+
+% ==========================================================
+\section{Checks espec\'ificos por estrategia}
+% ==========================================================
+
+El modelo ahora valida la estructura de cada estrategia, no solo reglas
+generales de calidad.
+
+\begin{longtable}{p{0.30\linewidth} p{0.58\linewidth}}
+\toprule
+\textbf{Estrategia} & \textbf{Checks principales} \\
+\midrule
+\texttt{long\_call} & DTE corto, IV rank alto, theta elevada, reward/risk
+d\'ebil y alineaci\'on con r\'egimen compuesto. \\
+\texttt{long\_put} & Reglas an\'alogas a long call, pero con sesgo bajista. \\
+\texttt{bull\_call\_debit\_spread} & Dos calls, long strike menor, short strike
+mayor, misma expiraci\'on, net debit y max loss definido. \\
+\texttt{bear\_put\_debit\_spread} & Dos puts, long strike mayor, short strike
+menor, misma expiraci\'on, net debit y max loss definido. \\
+\texttt{protective\_put} & Requiere posici\'on subyacente o marca como hedge;
+advierte si el costo es excesivo. \\
+\texttt{collar} & Requiere subyacente, long put, short call, strikes coherentes
+con spot y costo/cr\'edito calculable. \\
+\bottomrule
+\end{longtable}
+
+Cada check puede devolver:
+
+\begin{lstlisting}
+{
+  hardStops: string[],
+  caps: Array<"watchlist" | "approved_small">,
+  warnings: string[],
+  scoreAdjustments: number
+}
+\end{lstlisting}
+
+% ==========================================================
+\section{Yahoo Finance Sentiment}
+% ==========================================================
+
+La capa de sentimiento de Reddit queda fuera del flujo principal y se conserva
+solo como c\'odigo legado aislado. La nueva capa opcional es
+\textbf{Yahoo Finance Sentiment}.
+
+\subsection{Caracter\'isticas}
+
+\begin{itemize}[noitemsep]
+  \item Est\'a desactivada por defecto.
+  \item No usa LLM externo ni API de pago.
+  \item Usa endpoints p\'ublicos no oficiales de Yahoo Finance en modo
+        best-effort.
+  \item Si falla la recolecci\'on, devuelve baja se\~nal y no rompe la evaluaci\'on.
+  \item Guarda documentos normalizados en SQLite mediante
+        \texttt{YahooFinanceDocument}.
+\end{itemize}
+
+\subsection{Clasificaci\'on}
+
+El clasificador local calcula:
+
+\begin{itemize}[noitemsep]
+  \item relevancia frente al ticker y catalizador;
+  \item sentimiento bullish/bearish;
+  \item hype;
+  \item miedo;
+  \item menciones de catalizador;
+  \item preocupaciones legales/regulatorias.
+\end{itemize}
+
+Las etiquetas posibles son:
+
+\[
+\{\texttt{strong\_bullish},\texttt{bullish},\texttt{mixed},
+\texttt{bearish},\texttt{strong\_bearish},\texttt{low\_signal}\}.
+\]
+
+\subsection{Overlay}
+
+Si la confianza es alta y el sentimiento coincide con la direcci\'on del trade,
+puede sumar $+3$ puntos. Si contradice la direcci\'on, puede restar $-3$.
+
+Noticias severamente negativas, miedo alto o menciones legales/regulatorias
+pueden limitar la decisi\'on a \texttt{watchlist} y reducir el multiplicador de
+riesgo a 0.75.
+
+% ==========================================================
+\section{Base de datos y settings}
+% ==========================================================
+
+\subsection{Nuevos campos en \texttt{RiskSettings}}
+
+\begin{lstlisting}
+enableYahooFinanceSentiment Boolean @default(false)
+sentimentLookbackDays       Int     @default(14)
+sentimentMaxDocuments       Int     @default(10)
+eventRiskEnabled            Boolean @default(true)
+\end{lstlisting}
+
+\subsection{Nuevo modelo \texttt{YahooFinanceDocument}}
+
+\begin{lstlisting}
+model YahooFinanceDocument {
+  id             String   @id @default(cuid())
+  portfolioId    String?
+  ticker         String
+  title          String
+  publisher      String?
+  summary        String?
+  url            String?
+  publishedAt    DateTime?
+  collectedAt    DateTime @default(now())
+  sentimentLabel String?
+  sentimentScore Float?
+  relevanceScore Float?
+  hypeScore      Float?
+  fearScore      Float?
+  catalysts      String?
+  concerns       String?
+
+  @@index([ticker])
+  @@index([publishedAt])
+  @@index([collectedAt])
+}
+\end{lstlisting}
+
+% ==========================================================
+\section{Cambios visibles en UI}
+% ==========================================================
+
+\subsection{Trade Ideas}
+
+La vista de detalle de ideas ahora muestra:
+
+\begin{itemize}[noitemsep]
+  \item PoP, fuente, confianza y advertencias.
+  \item Kelly activado/desactivado y tope por Kelly fraccional.
+  \item riesgo por eventos: nivel, earnings, macro, eventos y multiplicador;
+  \item checks de estrategia: hard stops, caps, warnings y ajuste de score;
+  \item Yahoo Finance Sentiment: etiqueta, confianza, relevancia, resumen,
+        documentos usados, menciones y multiplicador.
+\end{itemize}
+
+\subsection{Risk Model}
+
+La p\'agina de modelo ahora incluye una tabla de r\'egimen compuesto con SPY, QQQ,
+breadth y VIX, mostrando peso, score, estado, raz\'on, confianza y advertencias.
+
+\subsection{Settings}
+
+La configuraci\'on muestra:
+
+\begin{itemize}[noitemsep]
+  \item activar/desactivar Yahoo Finance Sentiment;
+  \item d\'ias de lookback;
+  \item m\'aximo de documentos;
+  \item activar/desactivar overlay de event risk.
+\end{itemize}
+
+% ==========================================================
+\section{F\'ormula final de dimensionamiento}
+% ==========================================================
+
+El riesgo por multiplicadores es:
+
+\[
+R_{\text{mult}} =
+B \cdot C_{\text{score}} \cdot L \cdot G \cdot V \cdot H \cdot M \cdot S \cdot E,
+\]
+
+donde:
+
+\begin{longtable}{p{0.20\linewidth} p{0.68\linewidth}}
+\toprule
+\textbf{S\'imbolo} & \textbf{Descripci\'on} \\
+\midrule
+$B$ & Riesgo base por trade. \\
+$C_{\text{score}}$ & Multiplicador por confianza del score. \\
+$L$ & Liquidez de opciones. \\
+$G$ & R\'egimen compuesto alineado con direcci\'on. \\
+$V$ & Volatilidad/IV rank. \\
+$H$ & Concentraci\'on sectorial o tem\'atica. \\
+$M$ & Monte Carlo. \\
+$S$ & Yahoo Finance Sentiment. \\
+$E$ & Riesgo por eventos. \\
+\bottomrule
+\end{longtable}
+
+Luego:
+
+\[
+R_{\text{final}} =
+\min(R_{\text{mult}}, R_{\text{Kelly}}, R_{\text{sleeve}}, R_{\text{monthly}}, R_{\text{open}}).
+\]
+
+Si la decisi\'on final no empieza con \texttt{approved}, el riesgo sugerido es
+cero.
+
+% ==========================================================
+\section{Comandos locales}
+% ==========================================================
+
+Para una base existente:
+
+\begin{lstlisting}
+npm install
+npm run prisma:generate
+npm run db:migrate:yahoo-overlays
+npm run typecheck
+npm test
+npm run lint
+npm run build
+\end{lstlisting}
+
+Para una base nueva:
+
+\begin{lstlisting}
+npm install
+npm run db:init
+npm run prisma:generate
+npm run dev
+\end{lstlisting}
+
+No se agregaron variables de entorno nuevas. Alpaca sigue siendo opcional y de
+solo lectura para snapshots de contratos de opciones.
+
+% ==========================================================
+\section{Limitaciones conocidas}
+% ==========================================================
+
+\begin{itemize}[noitemsep]
+  \item Yahoo Finance es una fuente p\'ublica no oficial; puede fallar o cambiar.
+  \item Earnings solo se eval\'ua cuando se proveen eventos o se agregue una fuente
+        local/confiable.
+  \item El calendario macro est\'atico debe mantenerse manualmente actualizado.
+  \item La PoP por delta o IV proxy es menos confiable que Monte Carlo o IV real.
+  \item El sistema no predice precios, no da asesor\'ia financiera y no coloca
+        \'ordenes.
+\end{itemize}
+
+% ==========================================================
+\section{Criterios de validaci\'on implementados}
+% ==========================================================
+
+Se agregaron pruebas unitarias para:
+
+\begin{itemize}[noitemsep]
+  \item r\'egimen compuesto bullish y datos faltantes;
+  \item jerarqu\'ia PoP: Monte Carlo, delta proxy y no disponible;
+  \item earnings crossing y hard stop por naked short;
+  \item bull call debit spread v\'alido e inv\'alido;
+  \item overlay de Yahoo Finance con preocupaci\'on legal/regulatoria.
+\end{itemize}
+
+La validaci\'on local pas\'o con:
+
+\begin{lstlisting}
+npm run prisma:generate
+npm run typecheck
+npm test
+npm run lint
+npm run build
+\end{lstlisting}
+
+\end{document}

@@ -1,0 +1,93 @@
+{
+  "generated_at": "2026-07-20T23:18:57.000490+00:00",
+  "seed": 1729,
+  "symbols": [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA"
+  ],
+  "train_end": "2021-12-31",
+  "validation_end": "2023-12-31",
+  "test_start": "2024-01-01",
+  "transaction_cost_bps": 5.0,
+  "thresholds": {
+    "DeepAR-style": 0.5,
+    "EWMA": 0.024036303149580895,
+    "GJR-GARCH-t": 0.025742899554728166
+  },
+  "test_observations": 6370,
+  "metrics": [
+    {
+      "model": "Buy & hold",
+      "threshold": 0,
+      "annual_return": 0.2705851768914904,
+      "annual_volatility": 0.23232724653515385,
+      "sharpe": 1.1646725940538691,
+      "max_drawdown": -0.27524929403046383,
+      "final_wealth": 1.8318860479749592,
+      "exposure": 1.0,
+      "turnover_events": 0
+    },
+    {
+      "model": "EWMA",
+      "threshold": 0.024036303149580895,
+      "annual_return": 0.16333660180049026,
+      "annual_volatility": 0.1449853295560108,
+      "sharpe": 1.1265733043520794,
+      "max_drawdown": -0.16787266336347118,
+      "final_wealth": 1.465846960543183,
+      "exposure": 0.7700156985871272,
+      "turnover_events": 163
+    },
+    {
+      "model": "GJR-GARCH-t",
+      "threshold": 0.025742899554728166,
+      "annual_return": 0.20312775190859478,
+      "annual_volatility": 0.1549258930305075,
+      "sharpe": 1.3111284881772185,
+      "max_drawdown": -0.18522066538470094,
+      "final_wealth": 1.5959167877083065,
+      "exposure": 0.7701726844583987,
+      "turnover_events": 36
+    },
+    {
+      "model": "DeepAR-style",
+      "threshold": 0.5,
+      "annual_return": 0.011852079767384227,
+      "annual_volatility": 0.018554685307643728,
+      "sharpe": 0.6387647955690029,
+      "max_drawdown": -0.0279398193211301,
+      "final_wealth": 1.030231231431223,
+      "exposure": 0.005180533751962323,
+      "turnover_events": 44
+    }
+  ],
+  "forecast_metrics": [
+    {
+      "model": "DeepAR-style",
+      "mean_crps": 0.0129196179611305,
+      "directional_accuracy": 0.4621664050235479,
+      "negative_brier": 0.3321890302490461,
+      "interval_90_coverage": 0.8367346938775511
+    }
+  ],
+  "bootstrap": {
+    "garch_minus_hold_sharpe_90ci": [
+      -0.4264438859596228,
+      0.07228670105033619,
+      0.5089050259814462
+    ],
+    "garch_minus_hold_mean_daily_return_90ci": [
+      -0.0006647629130576071,
+      -0.00023675947145085466,
+      0.00016272480615380167
+    ]
+  }
+}

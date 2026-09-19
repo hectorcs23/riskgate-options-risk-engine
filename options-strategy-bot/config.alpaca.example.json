@@ -1,0 +1,73 @@
+{
+  "bot_name": "RiskGate Alpaca Options Trader",
+  "initial_equity_mxn": 100000,
+  "usd_mxn": 17.0,
+  "risk": {
+    "max_risk_per_trade_mxn": 3000,
+    "max_open_positions": 5,
+    "max_daily_candidates": 10,
+    "max_symbol_weight": 0.25
+  },
+  "universe": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "AMD",
+    "AVGO",
+    "JPM",
+    "V",
+    "MA",
+    "COST",
+    "DIS",
+    "HD",
+    "UNH"
+  ],
+  "market_symbols": {
+    "spy": "SPY",
+    "qqq": "QQQ",
+    "vix": "VIX"
+  },
+  "strategy": {
+    "enabled": [
+      "bull_call_debit_spread",
+      "bear_put_debit_spread"
+    ],
+    "dte": 45,
+    "hold_days": 10,
+    "min_score_to_enter": 60,
+    "target_reward_risk": 1.5,
+    "prefer_medium_volatility": true,
+    "allow_extended_moves": false
+  },
+  "costs": {
+    "slippage_bps": 75,
+    "commission_per_contract_usd": 0.65
+  },
+  "execution": {
+    "mode": "debit_spread",
+    "state_file": "outputs/alpaca_riskgate_state.json",
+    "max_new_positions": 2,
+    "max_open_positions": 5,
+    "max_daily_orders": 10,
+    "options_sleeve_pct": 1.0,
+    "risk_per_trade_pct": 0.01,
+    "min_open_interest": 100,
+    "min_contract_price_usd": 0.05,
+    "max_entry_debit_pct_of_portfolio": 0.03,
+    "dte_tolerance_days": 14,
+    "entry_price_pad_pct": 0.05,
+    "exit_price_pad_pct": 0.05,
+    "allow_watchlist_entries": true,
+    "allow_queued_orders": true,
+    "one_position_per_symbol": true,
+    "close_existing_positions": true,
+    "open_new_positions": true,
+    "take_profit_pct": null,
+    "stop_loss_pct": null,
+    "require_options_level": null
+  }
+}

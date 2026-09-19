@@ -1,0 +1,177 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{amsmath,booktabs,geometry,graphicx,hyperref,microtype,xcolor}
+\geometry{margin=2.35cm}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!60!black}
+\title{Forecasting para salidas en RiskGate\\\large Experimento 02: normalización por activo, reducción gradual y boosting cuantílico}
+\author{RiskGate Research}
+\date{20 de julio de 2026}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+El primer experimento sugirió que GJR--GARCH podía elevar el Sharpe y reducir el drawdown desde 2024, sin
+significancia estadística. Esta segunda prueba amplía el test a 2020--2026, normaliza la volatilidad por activo,
+reemplaza la salida binaria por estados de exposición 100/50/0 y añade LightGBM cuantílico. El resultado no
+confirma la señal inicial: buy-and-hold obtiene Sharpe 0.91, frente a 0.86 para GARCH gradual, 0.80 para LightGBM
+y 0.78 para el híbrido. GARCH protege durante 2020--2021, pero empeora 2022 y no conserva la ventaja después.
+El intervalo bootstrap al 90\% de la diferencia de Sharpe GARCH--hold es $[-0.45,0.35]$; para LightGBM es
+$[-0.24,-0.01]$. Una regla genérica de venta basada sólo en volatilidad o cuantiles diarios no tiene soporte para
+integrarse en RiskGate. El siguiente estudio debe condicionar la salida a una operación, horizonte, invalidación
+y payoff concretos.
+\end{abstract}
+
+\section{Motivación y cambio respecto del experimento 01}
+El experimento 01 evaluó diez activos desde 2024. GJR--GARCH--$t$ elevó el Sharpe observado de 1.16 a 1.31,
+pero su intervalo bootstrap incluyó ampliamente cero. Además, un umbral común dejó algunos activos siempre
+fuera del mercado. La segunda ronda fue diseñada antes de observar sus resultados para atacar esas debilidades:
+\begin{enumerate}
+  \item comenzar el test en 2020 e incluir varios regímenes;
+  \item expresar la volatilidad como percentil de la historia de cada activo;
+  \item reducir exposición gradualmente en lugar de liquidar ante un único umbral;
+  \item comparar contra regresión cuantílica con gradient boosting;
+  \item exigir consistencia por bloques, no sólo una mejora agregada.
+\end{enumerate}
+
+\section{Modelos y reglas}
+\subsection{GJR--GARCH normalizado}
+Se conserva GJR--GARCH(1,1) con innovaciones Student-$t$,
+\begin{equation}
+ \sigma_t^2=\omega+\alpha\epsilon_{t-1}^2+
+ \gamma\epsilon_{t-1}^2\mathbf 1\{\epsilon_{t-1}<0\}+\beta\sigma_{t-1}^2,
+\end{equation}
+reestimado cada 21 sesiones con un máximo de 1,250 observaciones. Para evitar comparar directamente la
+volatilidad de TSLA con la de SPY, $\hat\sigma_{t+1}$ se convierte en un percentil contra las últimas 504
+volatilidades realizadas a 20 sesiones del mismo activo. La exposición es
+\begin{equation}
+a_t^{G}=\begin{cases}
+1,&p_t<0.80,\\
+0.5,&0.80\le p_t<0.90,\\
+0,&p_t\ge0.90.
+\end{cases}
+\end{equation}
+No se optimizan estos cortes en test.
+
+\subsection{LightGBM cuantílico}
+Se entrenan tres modelos globales con pérdida pinball para $q\in\{0.1,0.5,0.9\}$. Las covariables incluyen
+retornos, volatilidad realizada, momentum, volumen, día de semana, identidad del activo y estado de SPY. La
+señal estandarizada es
+\begin{equation}
+s_t=\frac{\hat q_{0.50,t}}{\max(\hat q_{0.90,t}-\hat q_{0.10,t},10^{-6})}.
+\end{equation}
+Un único centro de decisión se selecciona en 2019; alrededor de éste se usa una banda fija para asignar
+exposición 0, 0.5 o 1. El híbrido toma $\min(a_t^G,a_t^Q)$, es decir, la recomendación más conservadora.
+
+\section{Protocolo}
+El universo permanece congelado: SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMZN, GOOGL, META y TSLA. Los precios
+ajustados provienen del endpoint público de Yahoo Finance. LightGBM se entrena con 2015--2018, su umbral se
+elige solamente en 2019 y el test comienza el 1 de enero de 2020. GARCH usa únicamente historia disponible en
+cada fecha. La decisión tomada al cierre $t$ se aplica al retorno $t+1$:
+\begin{equation}
+r^{strat}_{t+1}=a_t r_{t+1}-0.0005|a_t-a_{t-1}|.
+\end{equation}
+Se reportan cuatro bloques: 2020--2021, 2022, 2023--2024 y 2025--2026. La incertidumbre de la diferencia de
+Sharpe se estima con 2,000 bootstraps de bloques móviles de 20 sesiones.
+
+\section{Resultados agregados}
+\begin{table}[ht]
+\centering
+\caption{Resultados fuera de muestra, 2020--2026.}
+\begin{tabular}{lrrrrrr}
+\toprule
+Estrategia & Ret. anual & Vol. anual & Sharpe & Max DD & Exposición & Cambios\\
+\midrule
+Buy \& hold & 26.0\% & 28.5\% & 0.91 & $-45.4\%$ & 100.0\% & 0\\
+GARCH gradual & 18.7\% & 21.6\% & 0.86 & $-46.4\%$ & 84.5\% & 229\\
+LightGBM cuantílico & 22.3\% & 27.8\% & 0.80 & $-46.8\%$ & 96.4\% & 1,108\\
+Híbrido & 16.3\% & 21.0\% & 0.78 & $-46.8\%$ & 82.1\% & 1,004\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=.9\textwidth]{results/experiment_02/equity_curves.pdf}
+\caption{Riqueza acumulada fuera de muestra, neta del costo supuesto.}
+\end{figure}
+
+Ninguna capa supera buy-and-hold en Sharpe, retorno o drawdown máximo. GARCH disminuye la volatilidad un
+24\%, pero sacrifica aproximadamente 7.4 puntos porcentuales de retorno anual y no reduce el peor drawdown.
+El mayor número de cambios de LightGBM revela una señal inestable; aun con un costo modesto, la rotación daña
+el desempeño. Su intervalo predictivo nominal de 80\% cubre sólo 65.3\%, su mediana acierta el signo 50.4\% y
+por tanto está materialmente subcalibrado.
+
+\section{Resultados por régimen}
+\begin{table}[ht]
+\centering
+\caption{Sharpe por bloque.}
+\begin{tabular}{lrrrr}
+\toprule
+Estrategia & 2020--2021 & 2022 & 2023--2024 & 2025--2026\\
+\midrule
+Buy \& hold & 1.81 & $-1.17$ & 2.84 & 0.67\\
+GARCH gradual & 2.24 & $-1.53$ & 2.41 & 0.60\\
+LightGBM cuantílico & 1.50 & $-1.28$ & 2.80 & 0.62\\
+Híbrido & 1.98 & $-1.63$ & 2.39 & 0.51\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+GARCH funciona en 2020--2021: reduce el drawdown del bloque de $-32.9\%$ a $-14.5\%$ y eleva el Sharpe.
+Sin embargo, no protege el mercado bajista persistente de 2022. Una explicación es temporal: un filtro de
+volatilidad reacciona después de que comienza el movimiento, reduce exposición tras las pérdidas y puede perder
+la recuperación; tampoco distingue volatilidad favorable de deterioro de la tesis. El híbrido hereda las salidas
+incorrectas de ambos modelos.
+
+\section{Incertidumbre y decisión experimental}
+Los intervalos bootstrap al 90\% de la diferencia de Sharpe contra buy-and-hold son:
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Estrategia & IC 90\%\\
+\midrule
+GARCH gradual & $[-0.45,\ 0.35]$\\
+LightGBM cuantílico & $[-0.24,\ -0.01]$\\
+Híbrido & $[-0.58,\ 0.29]$\\
+\bottomrule
+\end{tabular}
+\end{center}
+GARCH sigue siendo inconcluso, ahora con mediana negativa. LightGBM es consistentemente peor al nivel usado.
+El criterio de éxito no se cumple. No se justifica añadir ninguna de estas reglas al score operativo de RiskGate.
+
+\section{Qué se aprendió}
+El resultado no implica que el forecasting carezca de valor. Refuta una formulación concreta: ``alta volatilidad
+o cuantil mediano negativo implica vender una posición larga genérica durante la siguiente sesión''. Una decisión
+de salida real depende de información omitida:
+\begin{itemize}
+  \item precio de entrada, beneficio acumulado e invalidación;
+  \item horizonte original y tiempo restante;
+  \item objetivo y probabilidad de tocar stop antes que objetivo;
+  \item estrategia de opción, theta, IV, gamma y payoff;
+  \item régimen de mercado y razón por la cual aumentó la volatilidad.
+\end{itemize}
+El forecasting puede ser más útil para dimensionar riesgo que para decidir dirección. El buen bloque de GARCH
+en 2020--2021 sugiere estudiar reducción de tamaño condicionada a una operación, no liquidación universal.
+
+\section{Siguiente experimento}
+La siguiente unidad de análisis debe ser una \emph{operación simulada}, no un día de exposición permanente:
+\begin{enumerate}
+  \item generar entradas con reglas congeladas de RiskGate;
+  \item fijar en la entrada stop, objetivo y horizonte máximo;
+  \item comparar salida base contra probabilidad de tocar stop antes del objetivo;
+  \item usar caminos Monte Carlo condicionados por GARCH y un benchmark histórico no paramétrico;
+  \item medir P\&L por operación, hit rate, expected shortfall, tiempo en mercado y falsos exits;
+  \item mantener train/valid/test y reportar resultados por régimen y estrategia.
+\end{enumerate}
+Sólo después de mostrar valor sobre operaciones del tipo que RiskGate realmente evalúa tendría sentido recopilar
+históricos de opciones y trasladar la política al payoff multileg.
+
+\section{Conclusión}
+La aparente ventaja inicial de GJR--GARCH no fue robusta al ampliar el horizonte y normalizar por activo.
+LightGBM cuantílico tampoco añadió valor y mostró mala calibración. Este resultado evita integrar prematuramente
+una regla que habría reducido retorno sin controlar el peor drawdown. La línea de investigación continúa, pero
+la pregunta correcta cambia de ``¿cuándo salir del mercado?'' a ``dada esta operación concreta, ¿cambió la
+probabilidad de alcanzar su invalidación antes que su objetivo?''.
+\end{document}

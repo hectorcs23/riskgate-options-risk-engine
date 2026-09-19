@@ -1,0 +1,8 @@
+data/
+results/deepar_style.pt
+results/experiment_02/*.txt
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
