@@ -2,8 +2,6 @@
 
 **A pre-trade risk gate for retail options trading.** Every trade idea has to pass a transparent, rule-based scoring engine before capital goes in. The engine scores market regime, technicals, option-contract quality and the quality of the trade plan, applies hard stops, and sizes the position under portfolio-level caps.
 
-![Two trade ideas scored by RiskGate](docs/img/scorecard.png)
-
 *Two ideas run through `evaluateTradeIdea()` ([`scripts/export-model-figures.ts`](scripts/export-model-figures.ts)). A chasing, 5-DTE, wide-spread TSLA call is rejected by five hard stops. A documented, liquid AAPL debit spread passes, but the Monte Carlo overlay and confidence multiplier shrink its size to 125 MXN, below its 260 max loss, so the app also warns.*
 
 > Local-first Next.js app + Python research harness · built by **Hector Campbell** with **Santiago Mejía Torres** ([@codemexico](https://github.com/codemexico)) · decision-support tool, **not financial advice**.
@@ -29,8 +27,6 @@ flowchart LR
 
 **1. Four sub-scores (0–100).** Market regime and technicals are rule-based. Options quality is **continuous**: seven smooth quality functions, weighted spread 30 %, DTE 20 %, volume 15 %, open interest 15 %, IV rank 8 %, premium size 7 %, theta 5 %.
 
-![Options-quality functions](docs/img/quality-curves.png)
-
 **2. Adaptive weights.** In stressed/bearish regimes options quality weighs 35 % (execution matters most). In a bullish regime technicals get 30 %. Neutral: market 35 / technical 25 / options 25 / process 15.
 
 **3. Overlays.** A 5,000-path Monte Carlo on the actual option legs (multi-leg aware) estimates probability of profit, EV, P5 and CVaR95 and adjusts the score. Event risk (earnings, FOMC, CPI…) and an optional news-sentiment overlay can cap the decision.
@@ -44,8 +40,6 @@ flowchart LR
 ```
 
 The result is then capped by a quarter-Kelly limit (from the estimated PoP and payoff ratio), the options-sleeve budget, the monthly loss limit and the open-risk limit.
-
-![Risk multipliers](docs/img/risk-multipliers.png)
 
 ## The app
 
